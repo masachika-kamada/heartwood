@@ -16,17 +16,50 @@ export interface GitHubTarget {
   readonly repo: string;
 }
 
+export type GitHubInput =
+  | { readonly kind: "repo"; readonly target: GitHubTarget }
+  | { readonly kind: "user"; readonly login: string };
+
+/**
+ * Accepts a repository (`owner/repo`, or a URL) or a person (`@name`, `name`,
+ * or their profile URL). One field, because asking someone to pick a mode
+ * before they have typed anything is a question they cannot answer yet.
+ */
+export function parseGitHubInput(input: string): GitHubInput | null {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const repo = parseRepoInput(trimmed);
+  if (repo) {
+    return { kind: "repo", target: repo };
+  }
+
+  const bare = stripGitHubOrigin(trimmed).replace(/^@/, "");
+  // GitHub logins: letters, digits and single hyphens, up to 39 characters.
+  if (/^[A-Za-z\d](?:[A-Za-z\d]|-(?=[A-Za-z\d])){0,38}$/.test(bare)) {
+    return { kind: "user", login: bare };
+  }
+
+  return null;
+}
+
+function stripGitHubOrigin(input: string): string {
+  return input
+    .replace(/^https?:\/\/(www\.)?github\.com\//i, "")
+    .replace(/^git@github\.com:/i, "")
+    .replace(/\.git$/i, "")
+    .replace(/\/+$/, "");
+}
+
 export function parseRepoInput(input: string): GitHubTarget | null {
   const trimmed = input.trim();
   if (!trimmed) {
     return null;
   }
 
-  const withoutOrigin = trimmed
-    .replace(/^https?:\/\/(www\.)?github\.com\//i, "")
-    .replace(/^git@github\.com:/i, "")
-    .replace(/\.git$/i, "")
-    .replace(/\/+$/, "");
+  const withoutOrigin = stripGitHubOrigin(trimmed);
 
   const match = /^([\w.-]+)\/([\w.-]+)$/.exec(withoutOrigin);
   if (!match) {

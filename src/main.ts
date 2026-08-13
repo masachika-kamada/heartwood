@@ -1,8 +1,9 @@
 import "./style.css";
 import { buildTree } from "./core/tree";
-import type { RepoHistory, TreeModel } from "./core/types";
+import type { LoadProgress, RepoHistory, TreeModel } from "./core/types";
 import { createDemoHistory } from "./sources/demo";
-import { loadGitHubHistory, parseRepoInput } from "./sources/github";
+import { loadGitHubHistory, parseGitHubInput } from "./sources/github";
+import { loadGitHubUserHistory } from "./sources/github-user";
 import { loadLocalHistory } from "./sources/git/local";
 import { renderTree } from "./render/rings";
 import { exportTreePng } from "./render/export";
@@ -37,19 +38,23 @@ app.innerHTML = `
       </div>
 
       <form class="control" id="github-form">
-        <label class="control__label" for="repo-input">…or a public GitHub repository</label>
+        <label class="control__label" for="repo-input">…or a public repository, or a person</label>
         <div class="control__row">
           <input
             id="repo-input"
             class="input"
             type="text"
-            placeholder="owner/repository"
+            placeholder="owner/repository, or a username"
             autocomplete="off"
             spellcheck="false"
           />
           <button class="button" type="submit">Grow</button>
         </div>
-        <p class="control__note">Anonymous requests are limited, and change sizes are unavailable.</p>
+        <p class="control__note">
+          A username draws everything that person has committed in public, across every
+          repository, as one continuous trunk. Anonymous requests are limited and change
+          sizes are unavailable.
+        </p>
       </form>
     </section>
 
@@ -60,7 +65,7 @@ app.innerHTML = `
         <li><span class="swatch swatch--dark"></span> Darker wood is work done between 22:00 and 05:00, in the author's own timezone.</li>
         <li><span class="swatch swatch--pinched"></span> A thin pale ring is a period when nothing was committed.</li>
         <li><span class="swatch swatch--scar"></span> A scar is a single commit far larger than everything around it.</li>
-        <li><span class="swatch swatch--hue"></span> Hue follows whoever committed most in that period.</li>
+        <li><span class="swatch swatch--hue"></span> <span id="hue-note">Hue follows whoever committed most in that period.</span></li>
       </ul>
       <div class="legend__actions">
         <button id="save-png" class="button" type="button">Save as PNG</button>
@@ -81,6 +86,13 @@ const localNote = document.querySelector<HTMLParagraphElement>("#local-note")!;
 const githubForm = document.querySelector<HTMLFormElement>("#github-form")!;
 const repoInput = document.querySelector<HTMLInputElement>("#repo-input")!;
 const savePngButton = document.querySelector<HTMLButtonElement>("#save-png")!;
+const hueNote = document.querySelector<HTMLSpanElement>("#hue-note")!;
+
+/**
+ * A person's tree is grouped by repository rather than by author, so the
+ * legend has to say what the colour actually means in that case.
+ */
+let hueMeansRepository = false;
 
 const inspector = createInspector(
   document.querySelector<HTMLElement>("#inspector")!,
@@ -105,7 +117,11 @@ function draw(reveal = 1): void {
   if (!currentTree) {
     return;
   }
-  renderTree(canvas, currentTree, { reveal });
+  renderTree(canvas, currentTree, { reveal, groupLabel: groupLabel() });
+}
+
+function groupLabel(): "hands" | "repositories" {
+  return hueMeansRepository ? "repositories" : "hands";
 }
 
 /** Grows the trunk outward once, so the picture arrives rather than appears. */
@@ -128,8 +144,11 @@ function animateGrowth(): void {
 
 function show(history: RepoHistory): void {
   currentTree = buildTree(history);
-  inspector.attach(currentTree);
+  inspector.attach(currentTree, hueMeansRepository);
   legend.hidden = false;
+  hueNote.textContent = hueMeansRepository
+    ? "Hue follows whichever repository took most of that period."
+    : "Hue follows whoever committed most in that period.";
 
   if (currentTree.rings.length === 0) {
     setStatus("That repository has no commits yet.", "error");
@@ -197,6 +216,7 @@ pickButton.addEventListener("click", async () => {
       (phase, done) => setStatus(`${phase}… ${done.toLocaleString("en")}`, "busy"),
       signal,
     );
+    hueMeansRepository = false;
     show(history);
   } catch (error) {
     reportFailure(error);
@@ -208,22 +228,26 @@ pickButton.addEventListener("click", async () => {
 githubForm.addEventListener("submit", async (event) => {
   event.preventDefault();
 
-  const target = parseRepoInput(repoInput.value);
-  if (!target) {
-    setStatus("Write it as owner/repository.", "error");
+  const parsed = parseGitHubInput(repoInput.value);
+  if (!parsed) {
+    setStatus("Try owner/repository, or a GitHub username.", "error");
     repoInput.focus();
     return;
   }
 
   const signal = beginLoad();
-  setStatus("Fetching commits…", "busy");
+  setStatus(parsed.kind === "user" ? "Looking for commits…" : "Fetching commits…", "busy");
 
   try {
-    const history = await loadGitHubHistory(
-      target,
-      (phase, done) => setStatus(`${phase}… ${done.toLocaleString("en")}`, "busy"),
-      signal,
-    );
+    const report: LoadProgress = (phase, done) =>
+      setStatus(`${phase}… ${done.toLocaleString("en")}`, "busy");
+
+    const history =
+      parsed.kind === "user"
+        ? await loadGitHubUserHistory(parsed.login, report, signal)
+        : await loadGitHubHistory(parsed.target, report, signal);
+
+    hueMeansRepository = parsed.kind === "user";
     show(history);
   } catch (error) {
     reportFailure(error);
@@ -235,7 +259,7 @@ savePngButton.addEventListener("click", async () => {
     return;
   }
   try {
-    await exportTreePng(currentTree);
+    await exportTreePng(currentTree, { groupLabel: groupLabel() });
   } catch (error) {
     reportFailure(error);
   }

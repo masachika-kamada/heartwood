@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseIsoOffsetMinutes, parseRepoInput } from "./github";
+import { parseGitHubInput, parseIsoOffsetMinutes, parseRepoInput } from "./github";
 
 describe("parseRepoInput", () => {
   it("accepts a bare owner/repo", () => {
@@ -34,6 +34,53 @@ describe("parseRepoInput", () => {
     expect(parseRepoInput("")).toBeNull();
     expect(parseRepoInput("just-a-name")).toBeNull();
     expect(parseRepoInput("too/many/parts")).toBeNull();
+  });
+});
+
+describe("parseGitHubInput", () => {
+  it("reads a repository when there is a slash", () => {
+    expect(parseGitHubInput("octocat/hello-world")).toEqual({
+      kind: "repo",
+      target: { owner: "octocat", repo: "hello-world" },
+    });
+    expect(parseGitHubInput("https://github.com/octocat/hello-world")).toEqual({
+      kind: "repo",
+      target: { owner: "octocat", repo: "hello-world" },
+    });
+  });
+
+  it("reads a person when there is not", () => {
+    expect(parseGitHubInput("octocat")).toEqual({ kind: "user", login: "octocat" });
+    expect(parseGitHubInput("@octocat")).toEqual({ kind: "user", login: "octocat" });
+    expect(parseGitHubInput("https://github.com/octocat")).toEqual({
+      kind: "user",
+      login: "octocat",
+    });
+  });
+
+  it("accepts logins with inner hyphens", () => {
+    expect(parseGitHubInput("masachika-kamada")).toEqual({
+      kind: "user",
+      login: "masachika-kamada",
+    });
+  });
+
+  it("rejects shapes GitHub could never accept", () => {
+    expect(parseGitHubInput("")).toBeNull();
+    expect(parseGitHubInput("   ")).toBeNull();
+    expect(parseGitHubInput("-leading")).toBeNull();
+    expect(parseGitHubInput("trailing-")).toBeNull();
+    expect(parseGitHubInput("double--hyphen")).toBeNull();
+    expect(parseGitHubInput("a".repeat(40))).toBeNull();
+    expect(parseGitHubInput("too/many/parts")).toBeNull();
+    expect(parseGitHubInput("has space")).toBeNull();
+  });
+
+  it("accepts a login of exactly the maximum length", () => {
+    expect(parseGitHubInput("a".repeat(39))).toEqual({
+      kind: "user",
+      login: "a".repeat(39),
+    });
   });
 });
 

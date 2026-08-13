@@ -7,11 +7,12 @@ import type { Ring, TreeModel } from "../core/types";
 import { BARK_THICKNESS, CAPTION_SPACE } from "../render/rings";
 
 export interface Inspector {
-  attach(tree: TreeModel): void;
+  attach(tree: TreeModel, hueMeansRepository?: boolean): void;
 }
 
 export function createInspector(panel: HTMLElement, canvas: HTMLCanvasElement): Inspector {
   let tree: TreeModel | null = null;
+  let byRepository = false;
 
   const hide = (): void => {
     panel.hidden = true;
@@ -29,14 +30,15 @@ export function createInspector(panel: HTMLElement, canvas: HTMLCanvasElement): 
     }
 
     panel.hidden = false;
-    panel.innerHTML = describe(ring);
+    panel.innerHTML = describe(ring, byRepository);
   });
 
   canvas.addEventListener("pointerleave", hide);
 
   return {
-    attach(next) {
+    attach(next, hueMeansRepository = false) {
       tree = next;
+      byRepository = hueMeansRepository;
       hide();
     },
   };
@@ -74,7 +76,7 @@ function ringAtPoint(
   return tree.rings.find((ring) => distance <= ring.outerRadius) ?? null;
 }
 
-function describe(ring: Ring): string {
+function describe(ring: Ring, byRepository: boolean): string {
   if (ring.dormant) {
     return `
       <h3 class="inspector__title">${escapeHtml(ring.label)}</h3>
@@ -86,7 +88,7 @@ function describe(ring: Ring): string {
     ["Commits", ring.commitCount.toLocaleString("en")],
     ["Lines changed", ring.churn.toLocaleString("en")],
     ["Night work", `${Math.round(ring.nightRatio * 100)}%`],
-    ["Hands", String(ring.authorCount)],
+    [byRepository ? "Repositories" : "Hands", String(ring.authorCount)],
   ];
 
   const stats = rows

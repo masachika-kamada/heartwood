@@ -4,21 +4,21 @@
  */
 
 import type { TreeModel } from "../core/types";
-import { renderTree } from "./rings";
+import { renderTree, type RenderOptions } from "./rings";
 
 const EXPORT_WIDTH = 1600;
 const EXPORT_HEIGHT = 1800;
 
 export async function exportTreePng(
   tree: TreeModel,
-  theme?: "dark" | "light",
+  options: Pick<RenderOptions, "theme" | "groupLabel"> = {},
 ): Promise<void> {
   const canvas = document.createElement("canvas");
   canvas.width = EXPORT_WIDTH;
   canvas.height = EXPORT_HEIGHT;
   // renderTree measures with clientWidth, which is 0 for a detached canvas, so
   // the intrinsic size is what it falls back to. Keep pixelRatio at 1 here.
-  renderTree(canvas, tree, { pixelRatio: 1, showCaption: true, reveal: 1, theme });
+  renderTree(canvas, tree, { ...options, pixelRatio: 1, showCaption: true, reveal: 1 });
 
   const blob = await new Promise<Blob | null>((resolve) => {
     canvas.toBlob(resolve, "image/png");

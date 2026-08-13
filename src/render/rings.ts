@@ -17,6 +17,11 @@ export interface RenderOptions {
   readonly reveal?: number;
   /** Defaults to whatever the visitor's system asks for. */
   readonly theme?: "dark" | "light";
+  /**
+   * A person's tree groups by repository, not by contributor, so the caption
+   * must not claim a hundred "hands" when it means a hundred projects.
+   */
+  readonly groupLabel?: "hands" | "repositories";
 }
 
 /** The trunk's outermost band. Exported so hit-testing can match the layout. */
@@ -171,7 +176,16 @@ export function renderTree(
   context.restore();
 
   if (showCaption) {
-    drawCaption(context, tree, cssWidth, cssHeight, captionSpace, palette, captionScale);
+    drawCaption(
+      context,
+      tree,
+      cssWidth,
+      cssHeight,
+      captionSpace,
+      palette,
+      captionScale,
+      options.groupLabel ?? "hands",
+    );
   }
 }
 
@@ -358,6 +372,7 @@ function drawCaption(
   captionSpace: number,
   palette: Palette,
   scale: number,
+  groupLabel: "hands" | "repositories",
 ): void {
   const baseline = height - captionSpace + 34 * scale;
 
@@ -372,7 +387,16 @@ function drawCaption(
   context.fillText(years, width / 2, baseline + 22 * scale);
 
   const rings = tree.rings.length;
-  const summary = `${formatCount(tree.totalCommits)} commits · ${rings} rings · ${formatCount(tree.authors.length)} ${tree.authors.length === 1 ? "hand" : "hands"}`;
+  const count = tree.authors.length;
+  const noun =
+    groupLabel === "repositories"
+      ? count === 1
+        ? "repository"
+        : "repositories"
+      : count === 1
+        ? "hand"
+        : "hands";
+  const summary = `${formatCount(tree.totalCommits)} commits · ${rings} rings · ${formatCount(count)} ${noun}`;
   context.fillText(summary, width / 2, baseline + 42 * scale);
 }
 
