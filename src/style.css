@@ -242,6 +242,54 @@ body {
   color: var(--ink-muted);
 }
 
+.control__note strong {
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.control__note--fine {
+  margin-top: 0.6rem;
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+}
+
+/* --- Worked examples: the field explains itself when clicked --- */
+.control__examples {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.7rem;
+}
+
+.control__examples-label {
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.chip {
+  padding: 0.2rem 0.55rem;
+  background-color: transparent;
+  color: var(--ink-muted);
+  border: 1px dashed var(--rule-strong);
+  border-radius: 999px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.74rem;
+  cursor: pointer;
+  transition: color 140ms ease, border-color 140ms ease, background-color 140ms ease;
+}
+
+.chip:hover {
+  color: var(--ink);
+  border-color: var(--heartwood);
+  border-style: solid;
+  background-color: color-mix(in srgb, var(--heartwood) 12%, transparent);
+}
+
+.chip:active { transform: translateY(1px); }
+
 .input {
   flex: 1 1 11rem;
   min-width: 0;
@@ -387,4 +435,5 @@ body {
   }
   .stage__status[data-tone='busy'] { animation: none; opacity: 1; }
   .button:active { transform: none; }
+  .chip:active { transform: none; }
 }

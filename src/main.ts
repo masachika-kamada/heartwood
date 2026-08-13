@@ -8,6 +8,7 @@ import { loadLocalHistory } from "./sources/git/local";
 import { renderTree } from "./render/rings";
 import { exportTreePng } from "./render/export";
 import { createInspector } from "./ui/inspector";
+import { INPUT_EXAMPLES } from "./ui/examples";
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) {
@@ -51,9 +52,21 @@ app.innerHTML = `
           <button class="button" type="submit">Grow</button>
         </div>
         <p class="control__note">
-          A username draws everything that person has committed in public, across every
-          repository, as one continuous trunk. Anonymous requests are limited and change
-          sizes are unavailable.
+          Two things fit in that one field. <strong>owner/repository</strong> draws a single
+          project. <strong>A username on its own</strong> draws everything that person has
+          committed in public, across every repository, as one continuous trunk — a
+          contribution graph that never resets.
+        </p>
+        <p class="control__examples">
+          <span class="control__examples-label">Try</span>
+          ${INPUT_EXAMPLES.map(
+            (example) =>
+              `<button class="chip" type="button" data-example="${example.value}">${example.value}</button>`,
+          ).join("")}
+        </p>
+        <p class="control__note control__note--fine">
+          Anonymous requests are rate limited, and GitHub does not report change sizes, so
+          these trees weigh every commit equally. A busy account takes a minute or two.
         </p>
       </form>
     </section>
@@ -253,6 +266,18 @@ githubForm.addEventListener("submit", async (event) => {
     reportFailure(error);
   }
 });
+
+/**
+ * The one field accepts two different things, and a sentence explaining that is
+ * easy to skip. A worked example is not: clicking one draws a tree, and the
+ * field is left holding the text that did it.
+ */
+for (const chip of document.querySelectorAll<HTMLButtonElement>("[data-example]")) {
+  chip.addEventListener("click", () => {
+    repoInput.value = chip.dataset.example ?? "";
+    githubForm.requestSubmit();
+  });
+}
 
 savePngButton.addEventListener("click", async () => {
   if (!currentTree) {
