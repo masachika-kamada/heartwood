@@ -1,214 +1,158 @@
 /**
- * Reads one person's commits across all their public repositories.
+ * Draws one person's GitHub activity without treating a transport-level list
+ * of commits as the product.
  *
- * This is what a contribution graph shows, except it does not reset every
- * January. GitHub's commit search refuses to page past 1000 results for any
- * one query, so a long career is fetched a year at a time and stitched back
- * together.
+ * With a token, GitHub's GraphQL contribution data already groups commits by
+ * date and repository, so several years fit in one request and no commit
+ * message, parent list, or SHA crosses into the drawing model.
  *
- * Anonymous search is limited to ten requests a minute, which a busy account
- * will exhaust. Rather than failing, this waits for the window to reset and
- * says so, because the alternative is asking someone to paste a token.
+ * Without a token, commit search is still the only official browser-readable
+ * source. That path is deliberately a newest-500 preview: it never waits for a
+ * second anonymous rate-limit window.
  */
 
-import type { CommitRecord, LoadProgress, RepoHistory } from "../core/types";
+import type { ActivityHistory, ActivityRecord, LoadProgress } from "../core/types";
+import { isNightAt } from "../core/activity";
 import { parseIsoOffsetMinutes } from "./github";
+import { hasToken } from "./github-auth";
+import { GitHubRateLimitError, githubFetch } from "./github-http";
 
 const PER_PAGE = 100;
-/** GitHub refuses to page past this many results for any one query. */
-const SEARCH_RESULT_CAP = 1000;
-const MAX_PAGES = SEARCH_RESULT_CAP / PER_PAGE;
-/** A rate limit window is a minute; never wait much longer than one. */
-const MAX_WAIT_MS = 75_000;
+const PREVIEW_PAGES = 5;
+const GRAPHQL_YEARS_PER_REQUEST = 4;
+const GRAPHQL_URL = new URL("https://api.github.com/graphql");
 
 interface SearchPage {
   readonly totalCount: number;
-  readonly commits: CommitRecord[];
-  readonly remaining: number | null;
-  readonly resetEpochMs: number | null;
+  readonly items: readonly PreviewItem[];
+  readonly incomplete: boolean;
+}
+
+interface PreviewItem {
+  readonly id: string;
+  readonly activity: ActivityRecord;
 }
 
 export async function loadGitHubUserHistory(
   login: string,
   onProgress: LoadProgress,
   signal: AbortSignal,
-): Promise<RepoHistory> {
-  const bySha = new Map<string, CommitRecord>();
-  let truncated = false;
+): Promise<ActivityHistory> {
+  return hasToken()
+    ? await loadContributionHistory(login, onProgress, signal)
+    : await loadAnonymousPreview(login, onProgress, signal);
+}
 
-  onProgress("Looking for commits", 0, null);
+async function loadAnonymousPreview(
+  login: string,
+  onProgress: LoadProgress,
+  signal: AbortSignal,
+): Promise<ActivityHistory> {
+  const byId = new Map<string, ActivityRecord>();
+  let totalCount = 0;
+  let incomplete = false;
+  let stoppedAtLimit = false;
 
-  // Ascending, so this single request answers both "how many?" and "since
-  // when?" — which saves a profile lookup out of a very small budget.
-  const probe = await searchCommits(`author:${login}`, 1, 1, onProgress, signal, 0);
+  for (let page = 1; page <= PREVIEW_PAGES; page += 1) {
+    onProgress(
+      "Fetching a quick preview",
+      byId.size,
+      totalCount === 0 ? null : Math.min(totalCount, 500),
+    );
 
-  if (probe.totalCount === 0) {
+    let result: SearchPage;
+    try {
+      result = await searchCommits(login, page, onProgress, signal, byId.size);
+    } catch (error) {
+      if (!(error instanceof GitHubRateLimitError) || byId.size === 0) {
+        throw error;
+      }
+      stoppedAtLimit = true;
+      break;
+    }
+
+    totalCount = result.totalCount;
+    incomplete = incomplete || result.incomplete;
+    for (const item of result.items) {
+      if (!byId.has(item.id)) {
+        byId.set(item.id, item.activity);
+      }
+    }
+    onProgress("Fetching a quick preview", byId.size, Math.min(totalCount, 500));
+
+    if (result.items.length < PER_PAGE || page * PER_PAGE >= totalCount) {
+      break;
+    }
+  }
+
+  const activities = [...byId.values()].sort((a, b) => a.timestampMs - b.timestampMs);
+  if (activities.length === 0) {
+    if (incomplete) {
+      throw new Error("GitHub's search timed out before it could produce a preview.");
+    }
     throw new Error(
-      `No public commits found for ${login}. Private and internal work only shows up through the local folder option.`,
+      `No public commits found for ${login}. Add a token to include activity GitHub can show you.`,
     );
   }
 
-  if (probe.totalCount <= SEARCH_RESULT_CAP) {
-    truncated = await collect(`author:${login}`, bySha, onProgress, signal);
-  } else {
-    const firstYear = probe.commits[0]
-      ? new Date(probe.commits[0].timestampMs).getFullYear()
-      : new Date().getFullYear() - 10;
-    const thisYear = new Date().getFullYear();
-
-    for (let year = firstYear; year <= thisYear; year += 1) {
-      if (signal.aborted) {
-        throw new DOMException("Aborted", "AbortError");
-      }
-      const stoppedEarly = await collect(
-        `author:${login} author-date:${year}-01-01..${year}-12-31`,
-        bySha,
-        onProgress,
-        signal,
-        year,
-      );
-      truncated = truncated || stoppedEarly;
-    }
-  }
-
-  const commits = [...bySha.values()].sort((a, b) => a.timestampMs - b.timestampMs);
-  if (commits.length === 0) {
-    throw new Error(`No commits could be read for ${login}.`);
-  }
-
-  return { name: login, commits, truncated, sourceKind: "github" };
-}
-
-/** Returns true when it gave up before reading everything. */
-async function collect(
-  query: string,
-  bySha: Map<string, CommitRecord>,
-  onProgress: LoadProgress,
-  signal: AbortSignal,
-  year?: number,
-): Promise<boolean> {
-  const label = year === undefined ? "Fetching commits" : `Fetching ${year}`;
-
-  for (let page = 1; page <= MAX_PAGES; page += 1) {
-    onProgress(label, bySha.size, null);
-
-    const result = await searchCommits(query, PER_PAGE, page, onProgress, signal, bySha.size);
-    for (const commit of result.commits) {
-      if (!bySha.has(commit.sha)) {
-        bySha.set(commit.sha, commit);
-      }
-    }
-
-    const seen = page * PER_PAGE;
-    if (result.commits.length < PER_PAGE || seen >= result.totalCount) {
-      return false;
-    }
-    if (seen >= SEARCH_RESULT_CAP) {
-      return true;
-    }
-  }
-
-  return true;
+  return {
+    name: login,
+    activities,
+    metric: "commits",
+    groupKind: "repositories",
+    truncated: incomplete || stoppedAtLimit || activities.length < totalCount,
+    sourceKind: "github",
+  };
 }
 
 async function searchCommits(
-  query: string,
-  perPage: number,
+  login: string,
   page: number,
   onProgress: LoadProgress,
   signal: AbortSignal,
   progressCount: number,
 ): Promise<SearchPage> {
   const url = new URL("https://api.github.com/search/commits");
-  url.searchParams.set("q", query);
-  url.searchParams.set("per_page", String(perPage));
+  url.searchParams.set("q", `author:${login}`);
+  url.searchParams.set("per_page", String(PER_PAGE));
   url.searchParams.set("page", String(page));
   url.searchParams.set("sort", "author-date");
-  url.searchParams.set("order", "asc");
+  url.searchParams.set("order", "desc");
 
-  // One retry only: a second refusal after a full window means something other
-  // than ordinary throttling is going on.
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const response = await fetch(url, {
-      signal,
-      headers: { Accept: "application/vnd.github+json" },
-    });
-
-    if (response.ok) {
-      return await readPage(response);
-    }
-
-    const throttled = response.status === 403 || response.status === 429;
-    if (throttled && attempt === 0) {
-      const waitMs = waitUntilReset(response);
-      if (waitMs !== null && waitMs <= MAX_WAIT_MS) {
-        const seconds = Math.max(1, Math.ceil(waitMs / 1000));
-        onProgress(`Waiting ${seconds}s for GitHub's rate limit`, progressCount, null);
-        await delay(waitMs, signal);
-        continue;
-      }
-    }
-
-    throw new Error(describeFailure(response.status));
-  }
-
-  throw new Error(
-    "GitHub kept refusing anonymous searches. Try again in a minute, or use the local folder option.",
-  );
+  const response = await githubFetch({
+    url,
+    signal,
+    onProgress,
+    progressCount,
+    rateLimitMode: "fail",
+  });
+  return await readSearchPage(response);
 }
 
-function describeFailure(status: number): string {
-  if (status === 403 || status === 429) {
-    return "GitHub is rate limiting anonymous searches. Wait a minute and try again, or use the local folder option.";
-  }
-  if (status === 422) {
-    return "GitHub could not make sense of that name.";
-  }
-  if (status === 404) {
-    return "GitHub has no such account.";
-  }
-  return `GitHub replied with ${status}.`;
-}
-
-/** Milliseconds until the limit resets, with a little slack. */
-function waitUntilReset(response: Response): number | null {
-  const retryAfter = readNumberHeader(response, "retry-after");
-  if (retryAfter !== null) {
-    return retryAfter * 1000 + 1000;
-  }
-  const reset = readNumberHeader(response, "x-ratelimit-reset");
-  if (reset === null) {
-    return null;
-  }
-  return Math.max(0, reset * 1000 - Date.now()) + 1000;
-}
-
-async function readPage(response: Response): Promise<SearchPage> {
+async function readSearchPage(response: Response): Promise<SearchPage> {
   const body = (await response.json()) as unknown;
-  const record = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
-  const items = Array.isArray(record.items) ? record.items : [];
+  const record = asRecord(body);
+  if (!record || typeof record.total_count !== "number" || !Array.isArray(record.items)) {
+    throw new Error("GitHub returned an unexpected commit search response.");
+  }
 
   return {
-    totalCount: typeof record.total_count === "number" ? record.total_count : 0,
-    commits: items
-      .map((item) => toCommitRecord(item))
-      .filter((commit): commit is CommitRecord => commit !== null),
-    remaining: readNumberHeader(response, "x-ratelimit-remaining"),
-    resetEpochMs: (readNumberHeader(response, "x-ratelimit-reset") ?? 0) * 1000 || null,
+    totalCount: record.total_count,
+    items: record.items
+      .map((item) => toPreviewItem(item))
+      .filter((item): item is PreviewItem => item !== null),
+    incomplete: record.incomplete_results === true,
   };
 }
 
-function toCommitRecord(entry: unknown): CommitRecord | null {
-  if (typeof entry !== "object" || entry === null) {
-    return null;
-  }
-
-  const item = entry as Record<string, unknown>;
-  const sha = typeof item.sha === "string" ? item.sha : null;
-  const commit = item.commit as Record<string, unknown> | undefined;
-  const author = commit?.author as Record<string, unknown> | undefined;
+function toPreviewItem(entry: unknown): PreviewItem | null {
+  const item = asRecord(entry);
+  const commit = asRecord(item?.commit);
+  const author = asRecord(commit?.author);
+  const repository = asRecord(item?.repository);
+  const sha = typeof item?.sha === "string" ? item.sha : null;
   const dateText = typeof author?.date === "string" ? author.date : null;
-
+  const repoName = typeof repository?.full_name === "string" ? repository.full_name : null;
   if (!sha || !dateText) {
     return null;
   }
@@ -217,46 +161,226 @@ function toCommitRecord(entry: unknown): CommitRecord | null {
   if (Number.isNaN(timestampMs)) {
     return null;
   }
-
-  const message = typeof commit?.message === "string" ? commit.message : "";
-  const repository = item.repository as Record<string, unknown> | undefined;
-  const repoName = typeof repository?.full_name === "string" ? repository.full_name : null;
-  const summary = message.split("\n", 1)[0]!.trim();
+  const tzOffsetMinutes = parseIsoOffsetMinutes(dateText);
 
   return {
-    sha,
-    timestampMs,
-    tzOffsetMinutes: parseIsoOffsetMinutes(dateText),
-    authorName: repoName ?? "unknown",
-    // Across one person's own history "who" is constant, so the colour is
-    // spent on where the work went instead.
-    authorEmail: repoName ?? "unknown",
-    summary: repoName ? `${repoName}: ${summary}` : summary,
-    parents: [],
-    insertions: null,
-    deletions: null,
+    id: `${repoName ?? "unknown"}:${sha}`,
+    activity: {
+      timestampMs,
+      count: 1,
+      magnitude: null,
+      nightCount: isNightAt(timestampMs, tzOffsetMinutes) ? 1 : 0,
+      groupKey: repoName,
+      detail: null,
+    },
   };
 }
 
-function readNumberHeader(response: Response, name: string): number | null {
-  const raw = response.headers.get(name);
-  if (raw === null) {
-    return null;
+async function loadContributionHistory(
+  login: string,
+  onProgress: LoadProgress,
+  signal: AbortSignal,
+): Promise<ActivityHistory> {
+  onProgress("Finding the account's first year", 0, null);
+  const profile = await graphqlRequest(PROFILE_QUERY, { login }, onProgress, signal, 0);
+  const user = asRecord(profile.user);
+  const createdAt = typeof user?.createdAt === "string" ? user.createdAt : null;
+  if (!user || !createdAt) {
+    throw new Error(`GitHub has no account named ${login}.`);
   }
-  const value = Number(raw);
-  return Number.isFinite(value) ? value : null;
+
+  const createdYear = new Date(createdAt).getUTCFullYear();
+  const currentYear = new Date().getUTCFullYear();
+  if (!Number.isFinite(createdYear) || createdYear > currentYear) {
+    throw new Error("GitHub returned an invalid account creation date.");
+  }
+
+  const years = Array.from(
+    { length: currentYear - createdYear + 1 },
+    (_, index) => createdYear + index,
+  );
+  const activities: ActivityRecord[] = [];
+  let reportedTotal = 0;
+  let observedTotal = 0;
+  let truncated = false;
+
+  for (let offset = 0; offset < years.length; offset += GRAPHQL_YEARS_PER_REQUEST) {
+    const batch = years.slice(offset, offset + GRAPHQL_YEARS_PER_REQUEST);
+    onProgress("Reading contribution years", offset, years.length);
+    const data = await graphqlRequest(
+      contributionQuery(batch),
+      { login },
+      onProgress,
+      signal,
+      observedTotal,
+    );
+    const batchUser = asRecord(data.user);
+    if (!batchUser) {
+      throw new Error(`GitHub has no account named ${login}.`);
+    }
+
+    for (const year of batch) {
+      const collection = asRecord(batchUser[`y${year}`]);
+      if (!collection) {
+        truncated = true;
+        continue;
+      }
+
+      const total =
+        typeof collection.totalCommitContributions === "number"
+          ? collection.totalCommitContributions
+          : 0;
+      reportedTotal += total;
+
+      const repositories = Array.isArray(collection.commitContributionsByRepository)
+        ? collection.commitContributionsByRepository
+        : [];
+      let observedYear = 0;
+
+      for (const value of repositories) {
+        const repositoryGroup = asRecord(value);
+        const repository = asRecord(repositoryGroup?.repository);
+        const repoName =
+          typeof repository?.nameWithOwner === "string" ? repository.nameWithOwner : null;
+        const contributions = asRecord(repositoryGroup?.contributions);
+        const nodes = Array.isArray(contributions?.nodes) ? contributions.nodes : [];
+        const pageInfo = asRecord(contributions?.pageInfo);
+        if (pageInfo?.hasNextPage === true) {
+          truncated = true;
+        }
+
+        for (const nodeValue of nodes) {
+          const node = asRecord(nodeValue);
+          const occurredAt =
+            typeof node?.occurredAt === "string" ? Date.parse(node.occurredAt) : Number.NaN;
+          const commitCount =
+            typeof node?.commitCount === "number" ? Math.max(0, node.commitCount) : 0;
+          if (!Number.isFinite(occurredAt) || commitCount === 0) {
+            continue;
+          }
+
+          observedYear += commitCount;
+          activities.push({
+            timestampMs: occurredAt,
+            count: commitCount,
+            magnitude: null,
+            nightCount: null,
+            groupKey: repoName,
+            detail: null,
+          });
+        }
+      }
+
+      observedTotal += observedYear;
+      if (observedYear < total) {
+        truncated = true;
+      }
+    }
+  }
+
+  onProgress("Reading contribution years", years.length, years.length);
+  if (activities.length === 0) {
+    if (reportedTotal > 0) {
+      throw new Error("GitHub reported commits but did not expose their dates and repositories.");
+    }
+    throw new Error(`No commits found for ${login} that this token can see.`);
+  }
+
+  activities.sort((a, b) => a.timestampMs - b.timestampMs);
+  return {
+    name: login,
+    activities,
+    metric: "commits",
+    groupKind: "repositories",
+    truncated: truncated || observedTotal < reportedTotal,
+    sourceKind: "github",
+  };
 }
 
-function delay(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const onAbort = (): void => {
-      clearTimeout(timer);
-      reject(new DOMException("Aborted", "AbortError"));
-    };
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    signal.addEventListener("abort", onAbort, { once: true });
+const PROFILE_QUERY = `
+  query HeartwoodProfile($login: String!) {
+    user(login: $login) {
+      createdAt
+    }
+  }
+`;
+
+function contributionQuery(years: readonly number[]): string {
+  const selections = years
+    .map((year) => {
+      const from = new Date(Date.UTC(year, 0, 1)).toISOString();
+      const yearEnd = new Date(Date.UTC(year + 1, 0, 1) - 1);
+      const to = new Date(Math.min(yearEnd.getTime(), Date.now())).toISOString();
+      return `
+        y${year}: contributionsCollection(from: "${from}", to: "${to}") {
+          ...HeartwoodContributionYear
+        }
+      `;
+    })
+    .join("\n");
+
+  return `
+    query HeartwoodContributionYears($login: String!) {
+      user(login: $login) {
+        ${selections}
+      }
+    }
+
+    fragment HeartwoodContributionYear on ContributionsCollection {
+      totalCommitContributions
+      commitContributionsByRepository(maxRepositories: 100) {
+        repository {
+          nameWithOwner
+        }
+        contributions(first: 100) {
+          nodes {
+            occurredAt
+            commitCount
+          }
+          pageInfo {
+            hasNextPage
+          }
+        }
+      }
+    }
+  `;
+}
+
+async function graphqlRequest(
+  query: string,
+  variables: Readonly<Record<string, unknown>>,
+  onProgress: LoadProgress,
+  signal: AbortSignal,
+  progressCount: number,
+): Promise<Record<string, unknown>> {
+  const response = await githubFetch({
+    url: GRAPHQL_URL,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, variables }),
+    signal,
+    onProgress,
+    progressCount,
   });
+  const payload = (await response.json()) as unknown;
+  const record = asRecord(payload);
+  if (!record) {
+    throw new Error("GitHub returned an unexpected GraphQL response.");
+  }
+
+  if (Array.isArray(record.errors) && record.errors.length > 0) {
+    const first = asRecord(record.errors[0]);
+    const message = typeof first?.message === "string" ? first.message : "GraphQL request failed.";
+    throw new Error(`GitHub could not read contribution history: ${message}`);
+  }
+
+  const data = asRecord(record.data);
+  if (!data) {
+    throw new Error("GitHub returned no contribution data.");
+  }
+  return data;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
 }

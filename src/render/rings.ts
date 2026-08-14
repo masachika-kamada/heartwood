@@ -7,6 +7,7 @@
 
 import type { Ring, TreeModel } from "../core/types";
 import { hashString, mulberry32 } from "../core/prng";
+import { activityNoun, groupNoun } from "../core/activity";
 
 export interface RenderOptions {
   /** Device pixel ratio, or a higher factor when exporting. */
@@ -17,11 +18,6 @@ export interface RenderOptions {
   readonly reveal?: number;
   /** Defaults to whatever the visitor's system asks for. */
   readonly theme?: "dark" | "light";
-  /**
-   * A person's tree groups by repository, not by contributor, so the caption
-   * must not claim a hundred "hands" when it means a hundred projects.
-   */
-  readonly groupLabel?: "hands" | "repositories";
 }
 
 /** The trunk's outermost band. Exported so hit-testing can match the layout. */
@@ -124,7 +120,7 @@ export function renderTree(
   context.fillRect(0, 0, cssWidth, cssHeight);
 
   if (tree.rings.length === 0) {
-    drawEmptyState(context, cssWidth, cssHeight, palette);
+    drawEmptyState(context, cssWidth, cssHeight, palette, tree);
     return;
   }
 
@@ -141,7 +137,7 @@ export function renderTree(
   const centreX = cssWidth / 2;
   const centreY = showCaption ? (cssHeight - captionSpace) / 2 + 16 : cssHeight / 2;
 
-  const authorHue = assignAuthorHues(tree);
+  const groupHue = assignGroupHues(tree);
   const random = mulberry32(hashString(tree.name));
   // A gentle, fixed wobble so the trunk is not a perfect machine circle.
   const wobble = createWobble(random);
@@ -156,7 +152,7 @@ export function renderTree(
   for (let index = 0; index < visibleRings; index += 1) {
     const ring = tree.rings[index]!;
     const inner = index === 0 ? 0 : tree.rings[index - 1]!.outerRadius;
-    drawRing(context, ring, inner, authorHue, wobble, palette);
+    drawRing(context, ring, inner, groupHue, wobble, palette);
   }
 
   // Scars reach outward past their own ring, so they go on last or the wood
@@ -184,7 +180,6 @@ export function renderTree(
       captionSpace,
       palette,
       captionScale,
-      options.groupLabel ?? "hands",
     );
   }
 }
@@ -246,21 +241,21 @@ function drawRing(
   context: CanvasRenderingContext2D,
   ring: Ring,
   innerRadius: number,
-  authorHue: ReadonlyMap<string, number>,
+  groupHue: ReadonlyMap<string, number>,
   wobble: Wobble,
   palette: Palette,
 ): void {
-  const hue = ring.dominantAuthor
+  const hue = ring.dominantGroup
     ? blendHue(
         palette.earlyWood.h,
-        authorHue.get(ring.dominantAuthor) ?? palette.earlyWood.h,
+        groupHue.get(ring.dominantGroup) ?? palette.earlyWood.h,
         ring.dominantShare,
       )
     : palette.earlyWood.h;
 
   // Late wood: the dark band laid down at the end of a growing season. Here it
-  // stands for night work, so a ring earned at 3am reads darker.
-  const nightPull = ring.nightRatio;
+  // stands for night work when the source has time-of-day data.
+  const nightPull = ring.nightRatio ?? 0;
   const lightness = ring.dormant
     ? palette.dormantLightness
     : lerp(palette.earlyWood.l, palette.lateWood.l, 0.2 + nightPull * 0.8);
@@ -372,7 +367,6 @@ function drawCaption(
   captionSpace: number,
   palette: Palette,
   scale: number,
-  groupLabel: "hands" | "repositories",
 ): void {
   const baseline = height - captionSpace + 34 * scale;
 
@@ -381,22 +375,22 @@ function drawCaption(
   context.font = `600 ${22 * scale}px ui-serif, Georgia, 'Times New Roman', serif`;
   context.fillText(tree.name, width / 2, baseline);
 
-  const years = `${formatDate(tree.firstCommitMs)} — ${formatDate(tree.lastCommitMs)}`;
+  const years = `${formatDate(tree.firstActivityMs)} — ${formatDate(tree.lastActivityMs)}`;
   context.fillStyle = palette.inkMuted;
   context.font = `${13 * scale}px ui-sans-serif, system-ui, sans-serif`;
   context.fillText(years, width / 2, baseline + 22 * scale);
 
   const rings = tree.rings.length;
-  const count = tree.authors.length;
-  const noun =
-    groupLabel === "repositories"
-      ? count === 1
-        ? "repository"
-        : "repositories"
-      : count === 1
-        ? "hand"
-        : "hands";
-  const summary = `${formatCount(tree.totalCommits)} commits · ${rings} rings · ${formatCount(count)} ${noun}`;
+  const parts = [
+    `${formatCount(tree.totalActivities)} ${activityNoun(tree.metric, tree.totalActivities)}`,
+    `${rings} rings`,
+  ];
+  if (tree.groupKind !== "none") {
+    parts.push(
+      `${formatCount(tree.groups.length)} ${groupNoun(tree.groupKind, tree.groups.length)}`,
+    );
+  }
+  const summary = parts.join(" · ");
   context.fillText(summary, width / 2, baseline + 42 * scale);
 }
 
@@ -405,21 +399,26 @@ function drawEmptyState(
   width: number,
   height: number,
   palette: Palette,
+  tree: TreeModel,
 ): void {
   context.textAlign = "center";
   context.fillStyle = palette.inkMuted;
   context.font = "14px ui-sans-serif, system-ui, sans-serif";
-  context.fillText("No commits to grow from.", width / 2, height / 2);
+  context.fillText(
+    `No ${activityNoun(tree.metric)} to grow from.`,
+    width / 2,
+    height / 2,
+  );
 }
 
 /* ------------------------------------------------------------------ *
  * Helpers
  * ------------------------------------------------------------------ */
 
-function assignAuthorHues(tree: TreeModel): Map<string, number> {
+function assignGroupHues(tree: TreeModel): Map<string, number> {
   const hues = new Map<string, number>();
-  for (const [index, author] of tree.authors.entries()) {
-    hues.set(author.email, AUTHOR_HUES[index % AUTHOR_HUES.length]!);
+  for (const [index, group] of tree.groups.entries()) {
+    hues.set(group.key, AUTHOR_HUES[index % AUTHOR_HUES.length]!);
   }
   return hues;
 }

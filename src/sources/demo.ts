@@ -7,7 +7,8 @@
  * rewrite, then a steady maintained tail.
  */
 
-import type { CommitRecord, RepoHistory } from "../core/types";
+import type { ActivityHistory, ActivityRecord } from "../core/types";
+import { isNightAt } from "../core/activity";
 import { hashString, mulberry32 } from "../core/prng";
 
 interface Chapter {
@@ -20,9 +21,9 @@ interface Chapter {
 }
 
 const CAST = [
-  { name: "Wren Alderby", email: "wren@example.com", tzOffsetMinutes: 540 },
-  { name: "Ansel Kohl", email: "ansel@example.com", tzOffsetMinutes: -300 },
-  { name: "Margot Fen", email: "margot@example.com", tzOffsetMinutes: 60 },
+  { email: "wren@example.com", tzOffsetMinutes: 540 },
+  { email: "ansel@example.com", tzOffsetMinutes: -300 },
+  { email: "margot@example.com", tzOffsetMinutes: 60 },
 ];
 
 const CHAPTERS: readonly Chapter[] = [
@@ -51,9 +52,9 @@ const SUMMARIES = [
   "Tidy up",
 ];
 
-export function createDemoHistory(): RepoHistory {
+export function createDemoHistory(): ActivityHistory {
   const random = mulberry32(hashString("heartwood-demo-v1"));
-  const commits: CommitRecord[] = [];
+  const activities: ActivityRecord[] = [];
 
   const start = new Date();
   start.setFullYear(start.getFullYear() - 3, start.getMonth(), 1);
@@ -84,16 +85,16 @@ export function createDemoHistory(): RepoHistory {
           (6 + random() * 90) * chapter.churnScale * (random() < 0.1 ? 4 : 1),
         );
 
-        commits.push({
-          sha: fakeSha(random),
+        const deletions = Math.round(magnitude * random() * 0.8);
+        const summary = SUMMARIES[Math.floor(random() * SUMMARIES.length)]!;
+        const id = fakeSha(random);
+        activities.push({
           timestampMs: date.getTime(),
-          tzOffsetMinutes: author.tzOffsetMinutes,
-          authorName: author.name,
-          authorEmail: author.email,
-          summary: SUMMARIES[Math.floor(random() * SUMMARIES.length)]!,
-          parents: [],
-          insertions: magnitude,
-          deletions: Math.round(magnitude * random() * 0.8),
+          count: 1,
+          magnitude: magnitude + deletions,
+          nightCount: isNightAt(date.getTime(), author.tzOffsetMinutes) ? 1 : 0,
+          groupKey: author.email,
+          detail: { id, summary },
         });
       }
 
@@ -102,27 +103,27 @@ export function createDemoHistory(): RepoHistory {
         date.setMonth(start.getMonth() + monthCursor + month);
         date.setDate(18);
         date.setHours(3, 14);
-        commits.push({
-          sha: fakeSha(random),
+        const id = fakeSha(random);
+        activities.push({
           timestampMs: date.getTime(),
-          tzOffsetMinutes: CAST[0]!.tzOffsetMinutes,
-          authorName: CAST[0]!.name,
-          authorEmail: CAST[0]!.email,
-          summary: "Replace the rendering layer entirely",
-          parents: [],
-          insertions: 9_400,
-          deletions: 7_800,
+          count: 1,
+          magnitude: 9_400 + 7_800,
+          nightCount: 1,
+          groupKey: CAST[0]!.email,
+          detail: { id, summary: "Replace the rendering layer entirely" },
         });
       }
     }
     monthCursor += chapter.months;
   }
 
-  commits.sort((a, b) => a.timestampMs - b.timestampMs);
+  activities.sort((a, b) => a.timestampMs - b.timestampMs);
 
   return {
     name: "a made-up project",
-    commits,
+    activities,
+    metric: "lines",
+    groupKind: "authors",
     truncated: false,
     sourceKind: "demo",
   };

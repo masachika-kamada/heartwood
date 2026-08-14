@@ -1,6 +1,7 @@
 import "./style.css";
 import { buildTree } from "./core/tree";
-import type { LoadProgress, RepoHistory, TreeModel } from "./core/types";
+import type { ActivityHistory, LoadProgress, TreeModel } from "./core/types";
+import { activityNoun } from "./core/activity";
 import { createDemoHistory } from "./sources/demo";
 import { loadGitHubHistory, parseGitHubInput } from "./sources/github";
 import { loadGitHubUserHistory } from "./sources/github-user";
@@ -9,6 +10,8 @@ import { renderTree } from "./render/rings";
 import { exportTreePng } from "./render/export";
 import { createInspector } from "./ui/inspector";
 import { INPUT_EXAMPLES } from "./ui/examples";
+import { clearToken, maskToken, readToken, saveToken } from "./sources/github-auth";
+import { resetBudgets } from "./sources/github-http";
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) {
@@ -39,7 +42,7 @@ app.innerHTML = `
       </div>
 
       <form class="control" id="github-form">
-        <label class="control__label" for="repo-input">…or a public repository, or a person</label>
+        <label class="control__label" for="repo-input">…or a GitHub repository, or a person</label>
         <div class="control__row">
           <input
             id="repo-input"
@@ -53,9 +56,8 @@ app.innerHTML = `
         </div>
         <p class="control__note">
           Two things fit in that one field. <strong>owner/repository</strong> draws a single
-          project. <strong>A username on its own</strong> draws everything that person has
-          committed in public, across every repository, as one continuous trunk — a
-          contribution graph that never resets.
+          project. <strong>A username on its own</strong> draws that person's GitHub commit
+          activity across repositories as one continuous trunk.
         </p>
         <p class="control__examples">
           <span class="control__examples-label">Try</span>
@@ -65,20 +67,55 @@ app.innerHTML = `
           ).join("")}
         </p>
         <p class="control__note control__note--fine">
-          Anonymous requests are rate limited, and GitHub does not report change sizes, so
-          these trees weigh every commit equally. A busy account takes a minute or two.
+          Without a token, a username returns a quick newest-500 preview and never waits for
+          another search window. With a token, GitHub's yearly contribution data supplies
+          the longer history in a handful of requests.
         </p>
       </form>
     </section>
 
+    <details class="token" id="token-drawer">
+      <summary class="token__summary">
+        <span id="token-summary-text">Want the full person history? Add a GitHub token</span>
+      </summary>
+      <div class="token__body">
+        <p class="token__note">
+          Anonymous searching gets ten requests a minute, shared by everyone on your
+          address; a token gets thirty, and lifts ordinary requests from sixty an hour to
+          five thousand. For a person, it also switches from a short search preview to
+          GitHub's compact yearly commit-contribution data.
+        </p>
+        <div class="control__row">
+          <input
+            id="token-input"
+            class="input"
+            type="password"
+            placeholder="ghp_… or github_pat_…"
+            autocomplete="off"
+            spellcheck="false"
+            aria-label="GitHub personal access token"
+          />
+          <button id="token-save" class="button" type="button">Save</button>
+          <button id="token-clear" class="button" type="button" hidden>Forget</button>
+        </div>
+        <p class="token__note token__note--fine">
+          Kept in this browser's local storage and sent only to api.github.com. There is no
+          server here to send it anywhere else. Public-only access is enough for public
+          history; grant repository read access only if you want private work counted.
+          <a href="https://github.com/settings/personal-access-tokens" target="_blank" rel="noreferrer noopener">Make one</a>.
+        </p>
+        <p class="token__state" id="token-state" role="status"></p>
+      </div>
+    </details>
+
     <section class="legend" id="legend" hidden>
       <h2>How to read it</h2>
       <ul>
-        <li><span class="swatch swatch--thick"></span> A wide ring is a period when a lot of code changed.</li>
-        <li><span class="swatch swatch--dark"></span> Darker wood is work done between 22:00 and 05:00, in the author's own timezone.</li>
-        <li><span class="swatch swatch--pinched"></span> A thin pale ring is a period when nothing was committed.</li>
-        <li><span class="swatch swatch--scar"></span> A scar is a single commit far larger than everything around it.</li>
-        <li><span class="swatch swatch--hue"></span> <span id="hue-note">Hue follows whoever committed most in that period.</span></li>
+        <li id="legend-volume"><span class="swatch swatch--thick"></span> <span id="legend-volume-text"></span></li>
+        <li id="legend-night"><span class="swatch swatch--dark"></span> Darker wood is work done between 22:00 and 05:00, in the author's own timezone.</li>
+        <li><span class="swatch swatch--pinched"></span> <span id="legend-dormant-text"></span></li>
+        <li id="legend-scar"><span class="swatch swatch--scar"></span> A scar is a single change far larger than everything around it.</li>
+        <li id="legend-group"><span class="swatch swatch--hue"></span> <span id="hue-note"></span></li>
       </ul>
       <div class="legend__actions">
         <button id="save-png" class="button" type="button">Save as PNG</button>
@@ -100,12 +137,11 @@ const githubForm = document.querySelector<HTMLFormElement>("#github-form")!;
 const repoInput = document.querySelector<HTMLInputElement>("#repo-input")!;
 const savePngButton = document.querySelector<HTMLButtonElement>("#save-png")!;
 const hueNote = document.querySelector<HTMLSpanElement>("#hue-note")!;
-
-/**
- * A person's tree is grouped by repository rather than by author, so the
- * legend has to say what the colour actually means in that case.
- */
-let hueMeansRepository = false;
+const legendVolumeText = document.querySelector<HTMLSpanElement>("#legend-volume-text")!;
+const legendDormantText = document.querySelector<HTMLSpanElement>("#legend-dormant-text")!;
+const legendNight = document.querySelector<HTMLLIElement>("#legend-night")!;
+const legendScar = document.querySelector<HTMLLIElement>("#legend-scar")!;
+const legendGroup = document.querySelector<HTMLLIElement>("#legend-group")!;
 
 const inspector = createInspector(
   document.querySelector<HTMLElement>("#inspector")!,
@@ -130,11 +166,7 @@ function draw(reveal = 1): void {
   if (!currentTree) {
     return;
   }
-  renderTree(canvas, currentTree, { reveal, groupLabel: groupLabel() });
-}
-
-function groupLabel(): "hands" | "repositories" {
-  return hueMeansRepository ? "repositories" : "hands";
+  renderTree(canvas, currentTree, { reveal });
 }
 
 /** Grows the trunk outward once, so the picture arrives rather than appears. */
@@ -155,25 +187,41 @@ function animateGrowth(): void {
   animationHandle = requestAnimationFrame(step);
 }
 
-function show(history: RepoHistory): void {
+function show(history: ActivityHistory): void {
   currentTree = buildTree(history);
-  inspector.attach(currentTree, hueMeansRepository);
+  inspector.attach(currentTree);
   legend.hidden = false;
-  hueNote.textContent = hueMeansRepository
-    ? "Hue follows whichever repository took most of that period."
-    : "Hue follows whoever committed most in that period.";
+  paintLegend(currentTree);
 
   if (currentTree.rings.length === 0) {
-    setStatus("That repository has no commits yet.", "error");
+    setStatus(`There are no ${activityNoun(currentTree.metric)} to draw.`, "error");
     draw();
     return;
   }
 
-  const truncatedNote = currentTree.truncated ? " Showing the most recent stretch only." : "";
+  const truncatedNote = currentTree.truncated ? " This is a partial history." : "";
   setStatus(
-    `${currentTree.name} · ${currentTree.totalCommits.toLocaleString("en")} commits.${truncatedNote}`,
+    `${currentTree.name} · ${currentTree.totalActivities.toLocaleString("en")} ${activityNoun(currentTree.metric, currentTree.totalActivities)}.${truncatedNote}`,
   );
   animateGrowth();
+}
+
+function paintLegend(tree: TreeModel): void {
+  legendVolumeText.textContent =
+    tree.metric === "lines"
+      ? "A wide ring is a period when a lot of code changed."
+      : `A wide ring is a period with many ${activityNoun(tree.metric)}.`;
+  legendDormantText.textContent =
+    `A thin pale ring is a period with no ${activityNoun(tree.metric)}.`;
+  legendNight.hidden = !tree.hasNightData;
+  legendScar.hidden = !tree.hasOutlierData;
+  legendGroup.hidden = tree.groupKind === "none";
+  hueNote.textContent =
+    tree.groupKind === "repositories"
+      ? "Hue follows whichever repository took most of that period."
+      : tree.groupKind === "authors"
+        ? "Hue follows whoever committed most in that period."
+        : "";
 }
 
 /* ------------------------------------------------------------------ *
@@ -226,10 +274,9 @@ pickButton.addEventListener("click", async () => {
   try {
     const history = await loadLocalHistory(
       handle,
-      (phase, done) => setStatus(`${phase}… ${done.toLocaleString("en")}`, "busy"),
+      (phase, done, total) => setStatus(progressText(phase, done, total), "busy"),
       signal,
     );
-    hueMeansRepository = false;
     show(history);
   } catch (error) {
     reportFailure(error);
@@ -252,15 +299,14 @@ githubForm.addEventListener("submit", async (event) => {
   setStatus(parsed.kind === "user" ? "Looking for commits…" : "Fetching commits…", "busy");
 
   try {
-    const report: LoadProgress = (phase, done) =>
-      setStatus(`${phase}… ${done.toLocaleString("en")}`, "busy");
+    const report: LoadProgress = (phase, done, total) =>
+      setStatus(progressText(phase, done, total), "busy");
 
     const history =
       parsed.kind === "user"
         ? await loadGitHubUserHistory(parsed.login, report, signal)
         : await loadGitHubHistory(parsed.target, report, signal);
 
-    hueMeansRepository = parsed.kind === "user";
     show(history);
   } catch (error) {
     reportFailure(error);
@@ -279,12 +325,78 @@ for (const chip of document.querySelectorAll<HTMLButtonElement>("[data-example]"
   });
 }
 
+/* ------------------------------------------------------------------ *
+ * The optional token
+ * ------------------------------------------------------------------ */
+
+const tokenInput = document.querySelector<HTMLInputElement>("#token-input")!;
+const tokenSave = document.querySelector<HTMLButtonElement>("#token-save")!;
+const tokenClear = document.querySelector<HTMLButtonElement>("#token-clear")!;
+const tokenState = document.querySelector<HTMLParagraphElement>("#token-state")!;
+const tokenSummaryText = document.querySelector<HTMLSpanElement>("#token-summary-text")!;
+
+function paintTokenState(message = ""): void {
+  const token = readToken();
+  tokenClear.hidden = token === null;
+  tokenSummaryText.textContent = token
+    ? `GitHub token saved · ${maskToken(token)}`
+    : "Want the full person history? Add a GitHub token";
+  tokenState.textContent = message;
+  tokenInput.value = "";
+  tokenInput.placeholder = token ? "Replace the saved token" : "ghp_… or github_pat_…";
+}
+
+tokenSave.addEventListener("click", () => {
+  const value = tokenInput.value.trim();
+  if (value === "") {
+    paintTokenState("Paste a token first.");
+    return;
+  }
+
+  const outcome = saveToken(value);
+  if (outcome === "invalid") {
+    paintTokenState("That does not look like a token, so it was not saved.");
+    return;
+  }
+  if (outcome === "unavailable") {
+    paintTokenState(
+      "This browser will not let the page store anything, so the token cannot be kept.",
+    );
+    return;
+  }
+
+  // The old budget belonged to the anonymous caller; the token has its own.
+  resetBudgets();
+  paintTokenState("Saved. Requests from this browser now go out signed.");
+});
+
+tokenClear.addEventListener("click", () => {
+  const outcome = clearToken();
+  if (outcome === "unavailable") {
+    paintTokenState("This browser would not remove the saved token.");
+    return;
+  }
+
+  resetBudgets();
+  paintTokenState("Forgotten. Back to anonymous requests.");
+});
+
+tokenInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    // This control sits outside the GitHub form, so make Enter act like Save.
+    event.preventDefault();
+    tokenSave.click();
+  }
+});
+
+paintTokenState();
+
 savePngButton.addEventListener("click", async () => {
   if (!currentTree) {
     return;
   }
   try {
-    await exportTreePng(currentTree, { groupLabel: groupLabel() });
+    await exportTreePng(currentTree);
   } catch (error) {
     reportFailure(error);
   }
@@ -294,3 +406,11 @@ window.addEventListener("resize", () => draw());
 
 show(createDemoHistory());
 setStatus("A made-up project, so the page is not empty. Open one of your own.");
+
+function progressText(phase: string, done: number, total: number | null): string {
+  const count =
+    total === null
+      ? done.toLocaleString("en")
+      : `${done.toLocaleString("en")} / ${total.toLocaleString("en")}`;
+  return `${phase}… ${count}`;
+}

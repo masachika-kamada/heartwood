@@ -6,7 +6,14 @@
  * byte of the repository leaves the machine.
  */
 
-import type { CommitRecord, HistorySource, LoadProgress, RepoHistory } from "../../core/types";
+import type {
+  ActivityHistory,
+  ActivityRecord,
+  CommitRecord,
+  HistorySource,
+  LoadProgress,
+} from "../../core/types";
+import { isNightAt } from "../../core/activity";
 import { GitObjectStore } from "./objects";
 
 const MAX_COMMITS = 20000;
@@ -73,12 +80,10 @@ export function parseIdentity(line: string): Identity {
 export function parseCommitObject(sha: string, payload: Uint8Array): CommitRecord {
   const text = decoder.decode(payload);
 
-  // Headers end at the first blank line; the rest is the message.
+  // Headers end at the first blank line.
   let headerEnd = text.indexOf("\n\n");
-  let messageAt = headerEnd + 2;
   if (headerEnd < 0) {
     headerEnd = text.length;
-    messageAt = text.length;
   }
 
   const parents: string[] = [];
@@ -99,20 +104,13 @@ export function parseCommitObject(sha: string, payload: Uint8Array): CommitRecor
   }
 
   const identity = author ?? EMPTY_IDENTITY;
-  const message = text.slice(messageAt);
-  const newline = message.indexOf("\n");
-  const summary = (newline < 0 ? message : message.slice(0, newline)).trim();
-
   return {
     sha,
     timestampMs: identity.timestampMs,
     tzOffsetMinutes: identity.tzOffsetMinutes,
     authorName: identity.name,
     authorEmail: identity.email,
-    summary,
     parents,
-    insertions: null,
-    deletions: null,
   };
 }
 
@@ -227,7 +225,7 @@ export async function loadLocalHistory(
   dir: FileSystemDirectoryHandle,
   onProgress: LoadProgress,
   signal: AbortSignal,
-): Promise<RepoHistory> {
+): Promise<ActivityHistory> {
   throwIfAborted(signal);
   onProgress("Opening repository", 0, null);
 
@@ -278,9 +276,23 @@ export async function loadLocalHistory(
 
   return {
     name: dir.name === ".git" || dir.name.length === 0 ? "repository" : dir.name,
-    commits,
+    activities: commits.map(toActivity),
+    metric: "commits",
+    groupKind: "authors",
     truncated,
     sourceKind: "local",
+  };
+}
+
+function toActivity(commit: CommitRecord): ActivityRecord {
+  const groupKey = commit.authorEmail || commit.authorName || "unknown";
+  return {
+    timestampMs: commit.timestampMs,
+    count: 1,
+    magnitude: null,
+    nightCount: isNightAt(commit.timestampMs, commit.tzOffsetMinutes) ? 1 : 0,
+    groupKey,
+    detail: null,
   };
 }
 

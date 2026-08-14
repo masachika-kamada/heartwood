@@ -11,7 +11,7 @@ const EXPORT_HEIGHT = 1800;
 
 export async function exportTreePng(
   tree: TreeModel,
-  options: Pick<RenderOptions, "theme" | "groupLabel"> = {},
+  options: Pick<RenderOptions, "theme"> = {},
 ): Promise<void> {
   const canvas = document.createElement("canvas");
   canvas.width = EXPORT_WIDTH;

@@ -2,13 +2,17 @@
  * Reads history from the public GitHub API.
  *
  * This exists so the page is not a dead end for someone who just wants to look
- * at something. It is unauthenticated, so it is rate limited (60 requests per
- * hour per IP) and capped well below what a local read can do.
+ * at something. Requests may use the optional token, but remote repository
+ * reads still stop after 1000 commits to keep browser and API work bounded.
+ * The local-folder source is the complete path for longer histories.
  */
 
-import type { CommitRecord, LoadProgress, RepoHistory } from "../core/types";
+import type { ActivityHistory, ActivityRecord, LoadProgress } from "../core/types";
+import { isNightAt } from "../core/activity";
+import { githubFetch } from "./github-http";
 
 const PER_PAGE = 100;
+/** Keep remote reads bounded even when a token raises GitHub's request budget. */
 const MAX_PAGES = 10;
 
 export interface GitHubTarget {
@@ -72,12 +76,12 @@ export async function loadGitHubHistory(
   target: GitHubTarget,
   onProgress: LoadProgress,
   signal: AbortSignal,
-): Promise<RepoHistory> {
-  const commits: CommitRecord[] = [];
+): Promise<ActivityHistory> {
+  const activities: ActivityRecord[] = [];
   let truncated = false;
 
   for (let page = 1; page <= MAX_PAGES; page += 1) {
-    onProgress("Fetching commits", commits.length, null);
+    onProgress("Fetching commits", activities.length, null);
 
     const url = new URL(
       `https://api.github.com/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}/commits`,
@@ -85,14 +89,12 @@ export async function loadGitHubHistory(
     url.searchParams.set("per_page", String(PER_PAGE));
     url.searchParams.set("page", String(page));
 
-    const response = await fetch(url, {
+    const response = await githubFetch({
+      url,
       signal,
-      headers: { Accept: "application/vnd.github+json" },
+      onProgress,
+      progressCount: activities.length,
     });
-
-    if (!response.ok) {
-      throw new Error(describeFailure(response.status, target));
-    }
 
     const batch = (await response.json()) as unknown;
     if (!Array.isArray(batch)) {
@@ -100,9 +102,9 @@ export async function loadGitHubHistory(
     }
 
     for (const entry of batch) {
-      const record = toCommitRecord(entry);
-      if (record) {
-        commits.push(record);
+      const activity = toActivity(entry);
+      if (activity) {
+        activities.push(activity);
       }
     }
 
@@ -114,50 +116,37 @@ export async function loadGitHubHistory(
     }
   }
 
-  if (commits.length === 0) {
+  if (activities.length === 0) {
     throw new Error("That repository has no commits to draw.");
   }
 
-  commits.sort((a, b) => a.timestampMs - b.timestampMs);
+  activities.sort((a, b) => a.timestampMs - b.timestampMs);
 
   return {
     name: `${target.owner}/${target.repo}`,
-    commits,
+    activities,
+    metric: "commits",
+    groupKind: "authors",
     truncated,
     sourceKind: "github",
   };
 }
 
-function describeFailure(status: number, target: GitHubTarget): string {
-  if (status === 404) {
-    return `Could not find ${target.owner}/${target.repo}. Private repositories need the local folder option.`;
-  }
-  if (status === 403 || status === 429) {
-    return "GitHub is rate limiting anonymous requests right now. Try the local folder option, or wait an hour.";
-  }
-  if (status === 409) {
-    return "That repository is empty.";
-  }
-  return `GitHub replied with ${status}.`;
-}
-
 /**
- * The list endpoint gives no per-commit stats. Fetching them would cost one
- * request per commit, which the anonymous rate limit cannot pay for, so churn
- * stays null and the tree falls back to weighing commits equally.
+ * The list endpoint already returns more than the drawing needs. Keep only
+ * when the commit happened and who authored it.
  */
-function toCommitRecord(entry: unknown): CommitRecord | null {
+function toActivity(entry: unknown): ActivityRecord | null {
   if (typeof entry !== "object" || entry === null) {
     return null;
   }
 
   const record = entry as Record<string, unknown>;
-  const sha = typeof record.sha === "string" ? record.sha : null;
   const commit = record.commit as Record<string, unknown> | undefined;
   const author = commit?.author as Record<string, unknown> | undefined;
   const dateText = typeof author?.date === "string" ? author.date : null;
 
-  if (!sha || !dateText) {
+  if (!dateText) {
     return null;
   }
 
@@ -166,27 +155,17 @@ function toCommitRecord(entry: unknown): CommitRecord | null {
     return null;
   }
 
-  const message = typeof commit?.message === "string" ? commit.message : "";
-  const parents = Array.isArray(record.parents)
-    ? record.parents
-        .map((parent) =>
-          typeof parent === "object" && parent !== null
-            ? (parent as Record<string, unknown>).sha
-            : null,
-        )
-        .filter((value): value is string => typeof value === "string")
-    : [];
+  const authorName = typeof author?.name === "string" ? author.name : "unknown";
+  const authorEmail = typeof author?.email === "string" ? author.email : authorName;
+  const tzOffsetMinutes = parseIsoOffsetMinutes(dateText);
 
   return {
-    sha,
     timestampMs,
-    tzOffsetMinutes: parseIsoOffsetMinutes(dateText),
-    authorName: typeof author?.name === "string" ? author.name : "unknown",
-    authorEmail: typeof author?.email === "string" ? author.email : "unknown",
-    summary: message.split("\n", 1)[0]!.trim(),
-    parents,
-    insertions: null,
-    deletions: null,
+    count: 1,
+    magnitude: null,
+    nightCount: isNightAt(timestampMs, tzOffsetMinutes) ? 1 : 0,
+    groupKey: authorEmail,
+    detail: null,
   };
 }
 

@@ -352,6 +352,70 @@ body {
   color: var(--ink-muted);
 }
 
+/* --- The optional token: folded away until the limit bites --- */
+.token {
+  margin-top: -0.75rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background-color: var(--bg-raised);
+}
+
+.token__summary {
+  padding: 0.7rem 1.15rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+  color: var(--ink-muted);
+  list-style: none;
+}
+
+.token__summary::-webkit-details-marker { display: none; }
+
+.token__summary::before {
+  content: '＋';
+  margin-right: 0.5rem;
+  color: var(--ink-faint);
+}
+
+.token[open] .token__summary::before { content: '−'; }
+.token__summary:hover { color: var(--ink); }
+
+.token__body {
+  padding: 0 1.15rem 1.15rem;
+  border-top: 1px solid var(--rule);
+  padding-top: 0.9rem;
+}
+
+.token__note {
+  margin-bottom: 0.75rem;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  color: var(--ink-muted);
+}
+
+.token__note--fine {
+  margin-top: 0.7rem;
+  margin-bottom: 0;
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+}
+
+.token__note code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.95em;
+  color: var(--ink-soft);
+}
+
+.token__note a { color: var(--heartwood); }
+
+.token__state:empty { display: none; }
+
+.token__state {
+  margin-top: 0.6rem;
+  font-size: 0.76rem;
+  color: var(--heartwood);
+}
+
 /* --- Legend and swatches --- */
 .legend { border-top: 1px solid var(--rule); padding-top: 1.4rem; }
 
@@ -374,6 +438,7 @@ body {
 }
 
 .legend li:last-child { border-bottom: 0; }
+.legend [hidden] { display: none; }
 .legend__actions { margin-top: 1.1rem; }
 
 .swatch {

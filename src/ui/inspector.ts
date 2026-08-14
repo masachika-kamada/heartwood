@@ -4,15 +4,15 @@
  */
 
 import type { Ring, TreeModel } from "../core/types";
+import { activityNoun, groupNoun } from "../core/activity";
 import { BARK_THICKNESS, CAPTION_SPACE } from "../render/rings";
 
 export interface Inspector {
-  attach(tree: TreeModel, hueMeansRepository?: boolean): void;
+  attach(tree: TreeModel): void;
 }
 
 export function createInspector(panel: HTMLElement, canvas: HTMLCanvasElement): Inspector {
   let tree: TreeModel | null = null;
-  let byRepository = false;
 
   const hide = (): void => {
     panel.hidden = true;
@@ -30,15 +30,14 @@ export function createInspector(panel: HTMLElement, canvas: HTMLCanvasElement): 
     }
 
     panel.hidden = false;
-    panel.innerHTML = describe(ring, byRepository);
+    panel.innerHTML = describe(ring, tree);
   });
 
   canvas.addEventListener("pointerleave", hide);
 
   return {
-    attach(next, hueMeansRepository = false) {
+    attach(next) {
       tree = next;
-      byRepository = hueMeansRepository;
       hide();
     },
   };
@@ -76,20 +75,32 @@ function ringAtPoint(
   return tree.rings.find((ring) => distance <= ring.outerRadius) ?? null;
 }
 
-function describe(ring: Ring, byRepository: boolean): string {
+function describe(ring: Ring, tree: TreeModel): string {
   if (ring.dormant) {
     return `
       <h3 class="inspector__title">${escapeHtml(ring.label)}</h3>
-      <p class="inspector__scar">Nothing was committed.</p>
+      <p class="inspector__scar">No ${activityNoun(tree.metric)}.</p>
     `;
   }
 
   const rows: Array<[string, string]> = [
-    ["Commits", ring.commitCount.toLocaleString("en")],
-    ["Lines changed", ring.churn.toLocaleString("en")],
-    ["Night work", `${Math.round(ring.nightRatio * 100)}%`],
-    [byRepository ? "Repositories" : "Hands", String(ring.authorCount)],
+    [
+      capitalise(activityNoun(tree.metric)),
+      ring.activityCount.toLocaleString("en"),
+    ],
   ];
+  if (tree.metric === "lines") {
+    rows.push(["Lines changed", ring.volume.toLocaleString("en")]);
+  }
+  if (ring.nightRatio !== null) {
+    rows.push(["Night work", `${Math.round(ring.nightRatio * 100)}%`]);
+  }
+  if (tree.groupKind !== "none") {
+    rows.push([
+      capitalise(groupNoun(tree.groupKind)),
+      ring.groupCount.toLocaleString("en"),
+    ]);
+  }
 
   const stats = rows
     .map(
@@ -107,6 +118,10 @@ function describe(ring: Ring, byRepository: boolean): string {
     <dl class="inspector__stats">${stats}</dl>
     ${scar}
   `;
+}
+
+function capitalise(value: string): string {
+  return value.length === 0 ? value : value[0]!.toUpperCase() + value.slice(1);
 }
 
 function escapeHtml(value: string): string {
