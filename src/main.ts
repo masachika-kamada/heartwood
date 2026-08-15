@@ -112,6 +112,7 @@ app.innerHTML = `
       <h2>How to read it</h2>
       <ul>
         <li id="legend-volume"><span class="swatch swatch--thick"></span> <span id="legend-volume-text"></span></li>
+        <li><span class="swatch swatch--hue"></span> Uneven growth shows when activity clustered within each period, from its start at the top clockwise.</li>
         <li id="legend-night"><span class="swatch swatch--dark"></span> Darker wood is work done between 22:00 and 05:00, in the author's own timezone.</li>
         <li><span class="swatch swatch--pinched"></span> <span id="legend-dormant-text"></span></li>
         <li id="legend-scar"><span class="swatch swatch--scar"></span> A scar is a single change far larger than everything around it.</li>

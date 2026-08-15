@@ -4,6 +4,7 @@
  * The mapping, in one place so it can be argued with:
  *   - one calendar period (month, or year for long histories) = one ring
  *   - ring thickness  <- the history's declared metric, damped by a log curve
+ *   - ring contour    <- when activity happened inside that period
  *   - ring darkness   <- share made at night, when the source knows it
  *   - ring hue        <- the group that dominated that period
  *   - pinched ring    <- a period with no activity at all
@@ -19,19 +20,19 @@ import type {
   TreeBuildOptions,
   TreeModel,
 } from "./types";
-import { hashString, mulberry32 } from "./prng";
-
 const MIN_THICKNESS = 1.6;
 const MAX_THICKNESS = 14;
 const DORMANT_THICKNESS = 0.9;
 const PITH_RADIUS = 6;
+export const CONTOUR_SAMPLES = 180;
+const CONTOUR_STRENGTH = 0.52;
+const CONTOUR_KERNEL_WIDTH = Math.PI / 7;
 
 /** Above this many periods we switch from monthly to yearly rings. */
 const MONTHLY_RING_LIMIT = 132;
 
 export function buildTree(history: ActivityHistory, options: TreeBuildOptions = {}): TreeModel {
   const activities = [...history.activities].sort((a, b) => a.timestampMs - b.timestampMs);
-  const seed = options.seed ?? history.name;
   if (activities.length === 0) {
     return {
       name: history.name,
@@ -62,10 +63,10 @@ export function buildTree(history: ActivityHistory, options: TreeBuildOptions = 
 
   const volumes = buckets.map((bucket) => bucket.volume);
   const referenceVolume = percentile(volumes.filter((value) => value > 0), 0.9) || 1;
-  const scarsByBucket = chooseScars(buckets, activities, seed, history.metric);
+  const scarsByBucket = chooseScars(buckets, activities, history.metric);
 
   const rings: Ring[] = [];
-  let radius = PITH_RADIUS;
+  let contour = Array<number>(CONTOUR_SAMPLES).fill(PITH_RADIUS);
 
   for (const [index, bucket] of buckets.entries()) {
     const dormant = bucket.activityCount === 0;
@@ -80,7 +81,7 @@ export function buildTree(history: ActivityHistory, options: TreeBuildOptions = 
           MAX_THICKNESS,
         );
 
-    radius += thickness;
+    contour = growContour(contour, bucket, thickness, history.metric);
 
     const dominant = dominantOf(bucket.groups);
 
@@ -92,7 +93,8 @@ export function buildTree(history: ActivityHistory, options: TreeBuildOptions = 
       activityCount: bucket.activityCount,
       volume: bucket.volume,
       thickness,
-      outerRadius: radius,
+      outerRadius: Math.max(...contour),
+      contour,
       nightRatio:
         bucket.timedActivityCount === 0 ? null : bucket.nightCount / bucket.timedActivityCount,
       groupCount: bucket.groups.size,
@@ -244,6 +246,59 @@ export function volumeOf(
 }
 
 /**
+ * Activity timestamps become positions around the cross-section: the start of
+ * a month/year is at 12 o'clock and time advances clockwise. Concentrated work
+ * produces a local bulge, while steady work produces a rounder ring.
+ */
+function growContour(
+  inner: readonly number[],
+  bucket: Bucket,
+  thickness: number,
+  metric: ActivityHistory["metric"],
+): number[] {
+  if (bucket.activityCount === 0) {
+    return inner.map((radius) => radius + thickness);
+  }
+
+  const density = Array<number>(CONTOUR_SAMPLES).fill(0);
+  const periodDuration = bucket.endMs - bucket.startMs;
+
+  for (const activity of bucket.activities) {
+    const eventAngle =
+      ((activity.timestampMs - bucket.startMs) / periodDuration) * Math.PI * 2;
+    const weight = Math.max(0, volumeOf(activity, metric));
+    if (weight === 0) {
+      continue;
+    }
+    for (let sample = 0; sample < CONTOUR_SAMPLES; sample += 1) {
+      const sampleAngle = (sample / CONTOUR_SAMPLES) * Math.PI * 2;
+      const distance = angularDistance(sampleAngle, eventAngle);
+      if (distance <= CONTOUR_KERNEL_WIDTH) {
+        const proximity = 1 - distance / CONTOUR_KERNEL_WIDTH;
+        density[sample] += weight * proximity * proximity;
+      }
+    }
+  }
+
+  const mean = density.reduce((sum, value) => sum + value, 0) / density.length;
+  if (mean === 0) {
+    return inner.map((radius) => radius + thickness);
+  }
+
+  const growth = density.map((value) =>
+    thickness * clamp(1 + CONTOUR_STRENGTH * (value / mean - 1), 0.48, 1.9),
+  );
+  const growthMean = growth.reduce((sum, value) => sum + value, 0) / growth.length;
+
+  return inner.map((radius, index) => radius + growth[index]! * (thickness / growthMean));
+}
+
+function angularDistance(a: number, b: number): number {
+  const difference = Math.abs(a - b) % (Math.PI * 2);
+  return Math.min(difference, Math.PI * 2 - difference);
+}
+
+/**
  * Scars are chosen across the whole history, not per period. Picking the
  * biggest few changes of every month meant a busy project ended up speckled
  * with a hundred marks, which says nothing — a scar has to be rare to mean
@@ -254,7 +309,6 @@ const MAX_SCARS = 7;
 function chooseScars(
   buckets: readonly Bucket[],
   activities: readonly ActivityRecord[],
-  seed: string,
   metric: ActivityHistory["metric"],
 ): Map<number, RingScar[]> {
   const byBucket = new Map<number, RingScar[]>();
@@ -286,17 +340,17 @@ function chooseScars(
     .sort((a, b) => (b.magnitude ?? 0) - (a.magnitude ?? 0))
     .slice(0, MAX_SCARS);
 
-  // Seeded by the event itself, so a scar sits in the same place every time
-  // regardless of what else is in the history.
   for (const activity of candidates) {
     const index = bucketOf.get(activity);
     if (index === undefined || !activity.detail) {
       continue;
     }
-    const random = mulberry32(hashString(seed + activity.detail.id));
+    const bucket = buckets[index]!;
+    const periodFraction =
+      (activity.timestampMs - bucket.startMs) / (bucket.endMs - bucket.startMs);
     const scars = byBucket.get(index) ?? [];
     scars.push({
-      angle: random() * Math.PI * 2,
+      angle: periodFraction * Math.PI * 2 - Math.PI / 2,
       severity: clamp((activity.magnitude ?? 0) / largest, 0.2, 1),
       id: activity.detail.id,
       summary: activity.detail.summary,

@@ -6,7 +6,6 @@
  */
 
 import type { Ring, TreeModel } from "../core/types";
-import { hashString, mulberry32 } from "../core/prng";
 import { activityNoun, groupNoun } from "../core/activity";
 
 export interface RenderOptions {
@@ -138,35 +137,32 @@ export function renderTree(
   const centreY = showCaption ? (cssHeight - captionSpace) / 2 + 16 : cssHeight / 2;
 
   const groupHue = assignGroupHues(tree);
-  const random = mulberry32(hashString(tree.name));
-  // A gentle, fixed wobble so the trunk is not a perfect machine circle.
-  const wobble = createWobble(random);
-
   context.save();
   context.translate(centreX, centreY);
   context.scale(scale, scale);
 
-  drawTrunkShadow(context, outerRadius, palette);
+  const outerContour = tree.rings[tree.rings.length - 1]!.contour;
+  drawTrunkShadow(context, outerContour, palette);
 
   const visibleRings = Math.ceil(tree.rings.length * reveal);
   for (let index = 0; index < visibleRings; index += 1) {
     const ring = tree.rings[index]!;
-    const inner = index === 0 ? 0 : tree.rings[index - 1]!.outerRadius;
-    drawRing(context, ring, inner, groupHue, wobble, palette);
+    const inner = index === 0 ? null : tree.rings[index - 1]!.contour;
+    drawRing(context, ring, inner, groupHue, palette);
   }
 
   // Scars reach outward past their own ring, so they go on last or the wood
   // laid down afterwards would paint over the wound.
   for (let index = 0; index < visibleRings; index += 1) {
     const ring = tree.rings[index]!;
-    const inner = index === 0 ? 0 : tree.rings[index - 1]!.outerRadius;
+    const inner = index === 0 ? null : tree.rings[index - 1]!.contour;
     for (const scar of ring.scars) {
-      drawScar(context, scar.angle, inner, ring.outerRadius, scar.severity, wobble, palette);
+      drawScar(context, scar.angle, inner, ring.contour, scar.severity, palette);
     }
   }
 
   if (reveal >= 1) {
-    drawBark(context, outerRadius, wobble, palette);
+    drawBark(context, outerContour, palette);
   }
 
   context.restore();
@@ -190,28 +186,6 @@ export function renderTree(
  * Rings
  * ------------------------------------------------------------------ */
 
-type Wobble = (angle: number, radius: number) => number;
-
-/**
- * Sum of a few low-frequency sine waves. Real trunks are lopsided; a perfect
- * circle reads as a chart, an imperfect one reads as wood.
- */
-function createWobble(random: () => number): Wobble {
-  const waves = Array.from({ length: 4 }, (_, index) => ({
-    frequency: index + 2,
-    phase: random() * Math.PI * 2,
-    amplitude: (0.028 / (index + 1)) * (0.6 + random() * 0.8),
-  }));
-
-  return (angle, radius) => {
-    let offset = 0;
-    for (const wave of waves) {
-      offset += Math.sin(angle * wave.frequency + wave.phase) * wave.amplitude;
-    }
-    return radius * (1 + offset);
-  };
-}
-
 /**
  * Traces one closed loop. It deliberately does NOT call `beginPath`, because an
  * annulus is a single path made of two loops filled with the even-odd rule —
@@ -219,13 +193,12 @@ function createWobble(random: () => number): Wobble {
  */
 function ringLoop(
   context: CanvasRenderingContext2D,
-  radius: number,
-  wobble: Wobble,
-  steps = 180,
+  contour: readonly number[] | null,
 ): void {
+  const steps = contour?.length ?? 180;
   for (let step = 0; step <= steps; step += 1) {
-    const angle = (step / steps) * Math.PI * 2;
-    const r = wobble(angle, radius);
+    const angle = (step / steps) * Math.PI * 2 - Math.PI / 2;
+    const r = contour ? contour[step % contour.length]! : 0;
     const x = Math.cos(angle) * r;
     const y = Math.sin(angle) * r;
     if (step === 0) {
@@ -240,9 +213,8 @@ function ringLoop(
 function drawRing(
   context: CanvasRenderingContext2D,
   ring: Ring,
-  innerRadius: number,
+  innerContour: readonly number[] | null,
   groupHue: ReadonlyMap<string, number>,
-  wobble: Wobble,
   palette: Palette,
 ): void {
   const hue = ring.dominantGroup
@@ -264,14 +236,14 @@ function drawRing(
     : lerp(palette.earlyWood.s, palette.lateWood.s, 0.4);
 
   context.beginPath();
-  ringLoop(context, ring.outerRadius, wobble);
-  ringLoop(context, innerRadius, wobble);
+  ringLoop(context, ring.contour);
+  ringLoop(context, innerContour);
   context.fillStyle = `hsl(${hue} ${saturation}% ${lightness}%)`;
   context.fill("evenodd");
 
   // A thin dark line at the outer edge of each ring: the season boundary.
   context.beginPath();
-  ringLoop(context, ring.outerRadius, wobble);
+  ringLoop(context, ring.contour);
   context.lineWidth = ring.dormant ? 0.6 : 0.8;
   context.strokeStyle = ring.dormant
     ? palette.dormantEdge
@@ -287,22 +259,23 @@ function drawRing(
 function drawScar(
   context: CanvasRenderingContext2D,
   angle: number,
-  innerRadius: number,
-  outerRadius: number,
+  innerContour: readonly number[] | null,
+  outerContour: readonly number[],
   severity: number,
-  wobble: Wobble,
   palette: Palette,
 ): void {
   // Narrow: a crack, not a slice of pie. Severity lengthens it more than it
   // widens it, so a huge commit reads as a deep split rather than a blob.
   const halfWidth = 0.004 + severity * 0.012;
+  const innerRadius = contourRadiusAtAngle(innerContour, angle);
+  const outerRadius = contourRadiusAtAngle(outerContour, angle);
   const reach = innerRadius + (outerRadius - innerRadius) * (1 + severity * 1.6);
   const steps = 10;
 
   context.beginPath();
   for (let step = 0; step <= steps; step += 1) {
     const a = angle - halfWidth + (step / steps) * halfWidth * 2;
-    const r = wobble(a, reach);
+    const r = reach;
     const x = Math.cos(a) * r;
     const y = Math.sin(a) * r;
     if (step === 0) {
@@ -312,7 +285,7 @@ function drawScar(
     }
   }
   // Taper to a point at the inner edge: the split closes as it goes inward.
-  const tip = wobble(angle, Math.max(0, innerRadius - outerRadius * 0.02));
+  const tip = Math.max(0, innerRadius - outerRadius * 0.02);
   context.lineTo(Math.cos(angle) * tip, Math.sin(angle) * tip);
   context.closePath();
 
@@ -322,18 +295,18 @@ function drawScar(
 
 function drawBark(
   context: CanvasRenderingContext2D,
-  outerRadius: number,
-  wobble: Wobble,
+  outerContour: readonly number[],
   palette: Palette,
 ): void {
+  const barkContour = outerContour.map((radius) => radius + BARK_THICKNESS);
   context.beginPath();
-  ringLoop(context, outerRadius, wobble);
-  ringLoop(context, outerRadius - BARK_THICKNESS, wobble);
+  ringLoop(context, barkContour);
+  ringLoop(context, outerContour);
   context.fillStyle = palette.bark;
   context.fill("evenodd");
 
   context.beginPath();
-  ringLoop(context, outerRadius, wobble);
+  ringLoop(context, barkContour);
   context.lineWidth = 1.2;
   context.strokeStyle = palette.outline;
   context.stroke();
@@ -341,18 +314,37 @@ function drawBark(
 
 function drawTrunkShadow(
   context: CanvasRenderingContext2D,
-  outerRadius: number,
+  outerContour: readonly number[],
   palette: Palette,
 ): void {
+  const outerRadius = Math.max(...outerContour) + BARK_THICKNESS;
+  const barkContour = outerContour.map((radius) => radius + BARK_THICKNESS);
   context.save();
   context.shadowColor = palette.shadow;
   context.shadowBlur = outerRadius * 0.14;
   context.shadowOffsetY = outerRadius * 0.035;
   context.beginPath();
-  context.arc(0, 0, outerRadius, 0, Math.PI * 2);
+  ringLoop(context, barkContour);
   context.fillStyle = palette.bark;
   context.fill();
   context.restore();
+}
+
+/** Interpolates the sampled contour at a canvas angle (-PI/2 is 12 o'clock). */
+export function contourRadiusAtAngle(
+  contour: readonly number[] | null,
+  angle: number,
+): number {
+  if (!contour || contour.length === 0) {
+    return 0;
+  }
+  const turn = Math.PI * 2;
+  const clockwise = ((angle + Math.PI / 2) % turn + turn) % turn;
+  const position = (clockwise / turn) * contour.length;
+  const lower = Math.floor(position) % contour.length;
+  const upper = (lower + 1) % contour.length;
+  const fraction = position - Math.floor(position);
+  return lerp(contour[lower]!, contour[upper]!, fraction);
 }
 
 /* ------------------------------------------------------------------ *

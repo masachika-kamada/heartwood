@@ -22,6 +22,7 @@ Missing measurements are omitted rather than replaced with invented values.
 | In the drawing | In the history |
 | --- | --- |
 | Ring width | Activity volume: changed lines when known, otherwise commit count |
+| Ring shape | When activity happened within the month or year, clockwise from the top |
 | Dark wood | Work between 22:00 and 05:00, only when exact author time is available |
 | A thin pale ring | A period when nothing was committed |
 | A scar | One measured change far larger than everything around it, when change size is available |

@@ -120,6 +120,45 @@ describe("buildTree", () => {
     expect(tree.rings[0]!.thickness).toBeGreaterThan(tree.rings[1]!.thickness);
   });
 
+  it("derives a repeatable contour directly from activity timing", () => {
+    const input = history([
+      activity({ timestampMs: new Date(2024, 0, 2).getTime(), magnitude: 80 }),
+      activity({ timestampMs: new Date(2024, 0, 3).getTime(), magnitude: 20 }),
+      activity({ timestampMs: new Date(2024, 0, 24).getTime(), magnitude: 10 }),
+    ]);
+
+    const first = buildTree(input);
+    const second = buildTree(input);
+    expect(first.rings[0]!.contour).toEqual(second.rings[0]!.contour);
+    expect(new Set(first.rings[0]!.contour).size).toBeGreaterThan(1);
+  });
+
+  it("changes the contour when the activity timing changes", () => {
+    const early = buildTree(
+      history([activity({ timestampMs: new Date(2024, 0, 3).getTime() })]),
+    );
+    const late = buildTree(
+      history([activity({ timestampMs: new Date(2024, 0, 24).getTime() })]),
+    );
+
+    expect(early.rings[0]!.contour).not.toEqual(late.rings[0]!.contour);
+  });
+
+  it("inherits each inner contour into the next ring", () => {
+    const tree = buildTree(
+      history([
+        activity({ timestampMs: new Date(2024, 0, 3).getTime(), magnitude: 100 }),
+        activity({ timestampMs: new Date(2024, 1, 20).getTime(), magnitude: 100 }),
+      ]),
+    );
+
+    for (let sample = 0; sample < tree.rings[0]!.contour.length; sample += 1) {
+      expect(tree.rings[1]!.contour[sample]).toBeGreaterThan(
+        tree.rings[0]!.contour[sample]!,
+      );
+    }
+  });
+
   it("accepts an already-aggregated contribution record", () => {
     const tree = buildTree(
       history(

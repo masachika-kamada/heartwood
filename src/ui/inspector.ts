@@ -5,7 +5,11 @@
 
 import type { Ring, TreeModel } from "../core/types";
 import { activityNoun, groupNoun } from "../core/activity";
-import { BARK_THICKNESS, CAPTION_SPACE } from "../render/rings";
+import {
+  BARK_THICKNESS,
+  CAPTION_SPACE,
+  contourRadiusAtAngle,
+} from "../render/rings";
 
 export interface Inspector {
   attach(tree: TreeModel): void;
@@ -45,8 +49,7 @@ export function createInspector(panel: HTMLElement, canvas: HTMLCanvasElement): 
 
 /**
  * Reverses the layout in `renderTree`: same fit maths, so a pointer position
- * maps back to a ring index. The wobble is ignored here — it is small enough
- * that including it would cost accuracy at the edges for no felt benefit.
+ * maps back to a ring index, including its data-driven contour.
  */
 function ringAtPoint(
   tree: TreeModel,
@@ -67,12 +70,16 @@ function ringAtPoint(
   const dx = event.clientX - bounds.left - centreX;
   const dy = event.clientY - bounds.top - centreY;
   const distance = Math.hypot(dx, dy) / scale;
+  const angle = Math.atan2(dy, dx);
 
-  if (distance > outerRadius) {
+  const outerContour = tree.rings[tree.rings.length - 1]!.contour;
+  if (distance > contourRadiusAtAngle(outerContour, angle) + BARK_THICKNESS) {
     return null;
   }
 
-  return tree.rings.find((ring) => distance <= ring.outerRadius) ?? null;
+  return tree.rings.find(
+    (ring) => distance <= contourRadiusAtAngle(ring.contour, angle),
+  ) ?? null;
 }
 
 function describe(ring: Ring, tree: TreeModel): string {

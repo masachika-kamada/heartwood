@@ -77,8 +77,14 @@ export interface Ring {
   /** Lines, commits, or contributions, according to the tree metric. */
   readonly volume: number;
   readonly thickness: number;
-  /** Outer radius after layout, in world units. */
+  /** Largest outer radius after data-driven contour layout, in world units. */
   readonly outerRadius: number;
+  /**
+   * Absolute radii sampled clockwise around the ring, starting at 12 o'clock.
+   * Activity timing shapes local growth; every outer ring inherits the wood
+   * already laid down inside it.
+   */
+  readonly contour: readonly number[];
   /** 0..1 share made at night, or null when the source has no time-of-day data. */
   readonly nightRatio: number | null;
   readonly groupCount: number;
@@ -128,6 +134,4 @@ export type RingPeriod = "month" | "year";
 
 export interface TreeBuildOptions {
   readonly period?: RingPeriod;
-  /** Deterministic seed so the same repository always draws the same tree. */
-  readonly seed?: string;
 }
