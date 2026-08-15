@@ -25,9 +25,10 @@ const MAX_THICKNESS = 14;
 const DORMANT_THICKNESS = 0.9;
 const PITH_RADIUS = 6;
 export const CONTOUR_SAMPLES = 180;
-const CONTOUR_STRENGTH = 0.11;
+const CONTOUR_STRENGTH = 0.04;
 const CONTOUR_KERNEL_WIDTH = Math.PI / 3;
 const INHERITED_SHAPE = 0.96;
+const TRUNK_CHARACTER = 0.035;
 
 /** Above this many periods we switch from monthly to yearly rings. */
 const MONTHLY_RING_LIMIT = 132;
@@ -65,9 +66,10 @@ export function buildTree(history: ActivityHistory, options: TreeBuildOptions = 
   const volumes = buckets.map((bucket) => bucket.volume);
   const referenceVolume = percentile(volumes.filter((value) => value > 0), 0.9) || 1;
   const scarsByBucket = chooseScars(buckets, activities, history.metric);
+  const historyProfile = buildHistoryProfile(activities, firstActivityMs, lastActivityMs);
 
   const rings: Ring[] = [];
-  let contour = Array<number>(CONTOUR_SAMPLES).fill(PITH_RADIUS);
+  let contour = historyProfile.map((factor) => PITH_RADIUS * factor);
 
   for (const [index, bucket] of buckets.entries()) {
     const dormant = bucket.activityCount === 0;
@@ -82,7 +84,13 @@ export function buildTree(history: ActivityHistory, options: TreeBuildOptions = 
           MAX_THICKNESS,
         );
 
-    contour = growContour(contour, bucket, thickness, history.metric);
+    contour = growContour(
+      contour,
+      bucket,
+      thickness,
+      history.metric,
+      historyProfile,
+    );
 
     const dominant = dominantOf(bucket.groups);
 
@@ -256,9 +264,12 @@ function growContour(
   bucket: Bucket,
   thickness: number,
   metric: ActivityHistory["metric"],
+  historyProfile: readonly number[],
 ): number[] {
   if (bucket.activityCount === 0) {
-    return inner.map((radius) => radius + thickness);
+    return inner.map(
+      (radius, index) => radius + thickness * historyProfile[index]!,
+    );
   }
 
   const density = Array<number>(CONTOUR_SAMPLES).fill(0);
@@ -283,7 +294,9 @@ function growContour(
 
   const mean = density.reduce((sum, value) => sum + value, 0) / density.length;
   if (mean === 0) {
-    return inner.map((radius) => radius + thickness);
+    return inner.map(
+      (radius, index) => radius + thickness * historyProfile[index]!,
+    );
   }
 
   // Log compression keeps one very large commit from turning the trunk into a
@@ -298,16 +311,67 @@ function growContour(
   const innerMean = inner.reduce((sum, value) => sum + value, 0) / inner.length;
 
   return inner.map(
-    (radius, index) =>
-      innerMean +
-      (radius - innerMean) * INHERITED_SHAPE +
-      growth[index]! * (thickness / growthMean),
+    (radius, index) => {
+      const profile = historyProfile[index]!;
+      const expectedInner = innerMean * profile;
+      return (
+        expectedInner +
+        (radius - expectedInner) * INHERITED_SHAPE +
+        growth[index]! * profile * (thickness / growthMean)
+      );
+    },
   );
 }
 
 function angularDistance(a: number, b: number): number {
   const difference = Math.abs(a - b) % (Math.PI * 2);
   return Math.min(difference, Math.PI * 2 - difference);
+}
+
+/**
+ * A low-frequency signature of the whole history. Its phases come directly
+ * from when work occurred, while a fixed small amplitude keeps the result as
+ * gently organic as the original renderer rather than visibly chart-like.
+ */
+function buildHistoryProfile(
+  activities: readonly ActivityRecord[],
+  firstMs: number,
+  lastMs: number,
+): number[] {
+  const span = Math.max(1, lastMs - firstMs);
+  const totalWeight = activities.reduce((sum, activity) => sum + activity.count, 0) || 1;
+  const harmonics = [2, 3, 4].map((frequency) => {
+    let cosine = 0;
+    let sine = 0;
+    for (const activity of activities) {
+      const angle = ((activity.timestampMs - firstMs) / span) * Math.PI * 2;
+      cosine += Math.cos(angle * frequency) * activity.count;
+      sine += Math.sin(angle * frequency) * activity.count;
+    }
+    return {
+      frequency,
+      cosine: cosine / totalWeight / frequency,
+      sine: sine / totalWeight / frequency,
+    };
+  });
+
+  const signature = Array.from({ length: CONTOUR_SAMPLES }, (_, sample) => {
+    const angle = (sample / CONTOUR_SAMPLES) * Math.PI * 2;
+    return harmonics.reduce(
+      (sum, harmonic) =>
+        sum +
+        harmonic.cosine * Math.cos(angle * harmonic.frequency) +
+        harmonic.sine * Math.sin(angle * harmonic.frequency),
+      0,
+    );
+  });
+  const mean = signature.reduce((sum, value) => sum + value, 0) / signature.length;
+  const centred = signature.map((value) => value - mean);
+  const extent = Math.max(...centred.map(Math.abs));
+  if (extent === 0) {
+    return Array<number>(CONTOUR_SAMPLES).fill(1);
+  }
+  return centred.map((value) => 1 + (value / extent) * TRUNK_CHARACTER);
 }
 
 /**

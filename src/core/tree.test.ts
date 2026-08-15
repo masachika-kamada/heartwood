@@ -173,6 +173,21 @@ describe("buildTree", () => {
     expect(spread / Math.max(...contour)).toBeLessThan(0.12);
   });
 
+  it("retains a gentle whole-history character in the outer silhouette", () => {
+    const activities = Array.from({ length: 36 }, (_, month) =>
+      activity({
+        timestampMs: new Date(2022 + Math.floor(month / 12), month % 12, 2).getTime(),
+        count: month < 8 ? 8 : 1,
+      }),
+    );
+    const tree = buildTree(history(activities, "commits"));
+    const contour = tree.rings[tree.rings.length - 1]!.contour;
+    const spread = Math.max(...contour) - Math.min(...contour);
+
+    expect(spread / Math.max(...contour)).toBeGreaterThan(0.025);
+    expect(spread / Math.max(...contour)).toBeLessThan(0.1);
+  });
+
   it("accepts an already-aggregated contribution record", () => {
     const tree = buildTree(
       history(
