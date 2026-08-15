@@ -12,8 +12,8 @@ Missing measurements are omitted rather than replaced with invented values.
 - **A folder on this computer** — reads `.git` in the browser. Nothing leaves the
   machine.
 - **`owner/repository`** — one public repository, through the GitHub API.
-- **A username without a token** — a fast preview of the newest 500 public
-  commits. It stops rather than waiting for another anonymous search window.
+- **A username without a token** — a fast sample of up to 500 public commits,
+  spread across the account's lifetime.
 - **A username with a token** — GitHub's yearly commit-contribution data,
   grouped by date and repository, as one continuous trunk.
 
@@ -44,8 +44,8 @@ The GitHub options call GitHub directly from the browser. Repository reads are
 deliberately capped at the newest 1000 commits; use the local-folder option for
 the complete history of a larger repository.
 
-An anonymous username lookup uses at most five commit-search requests and
-returns a partial newest-500 preview. With a token, Heartwood switches to the
+An anonymous username lookup uses at most five commit-search requests, spread
+across the account's lifetime. With a token, Heartwood switches to the
 GraphQL contribution model: one node can represent several commits on one date
 and repository, and four years are requested together. This drops commit
 messages, parents and other response fields that the drawing never uses.

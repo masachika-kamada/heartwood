@@ -33,16 +33,19 @@ describe("loadGitHubUserHistory", () => {
 
   it("returns a bounded anonymous preview instead of waiting for another window", async () => {
     const firstPage = Array.from({ length: 100 }, (_, index) => searchItem(index));
-    const fetchMock = vi.fn().mockResolvedValue(
-      reply(
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(reply({ created_at: "2008-01-01T00:00:00Z" }, "59"))
+      .mockResolvedValueOnce(
+        reply(
         {
           total_count: 900,
           incomplete_results: false,
           items: firstPage,
         },
         "0",
-      ),
-    );
+        ),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     const history = await loadGitHubUserHistory(
@@ -51,11 +54,37 @@ describe("loadGitHubUserHistory", () => {
       new AbortController().signal,
     );
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(history.activities).toHaveLength(100);
     expect(history.metric).toBe("commits");
     expect(history.groupKind).toBe("repositories");
     expect(history.truncated).toBe(true);
+  });
+
+  it("spreads anonymous searches across the account lifetime", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(reply({ created_at: "2000-01-01T00:00:00Z" }, "59"))
+      .mockImplementation(async () =>
+        reply({
+          total_count: 1,
+          incomplete_results: false,
+          items: [searchItem(1)],
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await loadGitHubUserHistory(
+      "someone",
+      vi.fn(),
+      new AbortController().signal,
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(6);
+    const searchUrls = fetchMock.mock.calls.slice(1).map(([input]) => new URL(String(input)));
+    const queries = searchUrls.map((url) => url.searchParams.get("q"));
+    expect(queries.every((query) => query?.includes("author-date:"))).toBe(true);
+    expect(new Set(queries).size).toBe(5);
   });
 
   it("uses compact yearly GraphQL commit contributions when a token exists", async () => {

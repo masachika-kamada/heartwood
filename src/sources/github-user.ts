@@ -7,8 +7,8 @@
  * message, parent list, or SHA crosses into the drawing model.
  *
  * Without a token, commit search is still the only official browser-readable
- * source. That path is deliberately a newest-500 preview: it never waits for a
- * second anonymous rate-limit window.
+ * source. Five searches are spread across the account's lifetime so a prolific
+ * person's newest few days do not collapse an entire career into one ring.
  */
 
 import type { ActivityHistory, ActivityRecord, LoadProgress } from "../core/types";
@@ -48,21 +48,31 @@ async function loadAnonymousPreview(
   onProgress: LoadProgress,
   signal: AbortSignal,
 ): Promise<ActivityHistory> {
+  onProgress("Finding the account's timeline", 0, PREVIEW_PAGES);
+  const createdAt = await loadPublicProfileCreatedAt(login, onProgress, signal);
+  const windows = timelineWindows(createdAt, Date.now(), PREVIEW_PAGES);
   const byId = new Map<string, ActivityRecord>();
   let totalCount = 0;
   let incomplete = false;
   let stoppedAtLimit = false;
 
-  for (let page = 1; page <= PREVIEW_PAGES; page += 1) {
+  for (const [index, window] of windows.entries()) {
     onProgress(
-      "Fetching a quick preview",
-      byId.size,
-      totalCount === 0 ? null : Math.min(totalCount, 500),
+      "Sampling the account's timeline",
+      index,
+      windows.length,
     );
 
     let result: SearchPage;
     try {
-      result = await searchCommits(login, page, onProgress, signal, byId.size);
+      result = await searchCommits(
+        login,
+        window.startMs,
+        window.endMs,
+        onProgress,
+        signal,
+        byId.size,
+      );
     } catch (error) {
       if (!(error instanceof GitHubRateLimitError) || byId.size === 0) {
         throw error;
@@ -71,18 +81,14 @@ async function loadAnonymousPreview(
       break;
     }
 
-    totalCount = result.totalCount;
+    totalCount += result.totalCount;
     incomplete = incomplete || result.incomplete;
     for (const item of result.items) {
       if (!byId.has(item.id)) {
         byId.set(item.id, item.activity);
       }
     }
-    onProgress("Fetching a quick preview", byId.size, Math.min(totalCount, 500));
-
-    if (result.items.length < PER_PAGE || page * PER_PAGE >= totalCount) {
-      break;
-    }
+    onProgress("Sampling the account's timeline", index + 1, windows.length);
   }
 
   const activities = [...byId.values()].sort((a, b) => a.timestampMs - b.timestampMs);
@@ -107,15 +113,16 @@ async function loadAnonymousPreview(
 
 async function searchCommits(
   login: string,
-  page: number,
+  startMs: number,
+  endMs: number,
   onProgress: LoadProgress,
   signal: AbortSignal,
   progressCount: number,
 ): Promise<SearchPage> {
   const url = new URL("https://api.github.com/search/commits");
-  url.searchParams.set("q", `author:${login}`);
+  const range = `${formatSearchDate(startMs)}..${formatSearchDate(endMs)}`;
+  url.searchParams.set("q", `author:${login} author-date:${range}`);
   url.searchParams.set("per_page", String(PER_PAGE));
-  url.searchParams.set("page", String(page));
   url.searchParams.set("sort", "author-date");
   url.searchParams.set("order", "desc");
 
@@ -127,6 +134,49 @@ async function searchCommits(
     rateLimitMode: "fail",
   });
   return await readSearchPage(response);
+}
+
+async function loadPublicProfileCreatedAt(
+  login: string,
+  onProgress: LoadProgress,
+  signal: AbortSignal,
+): Promise<number> {
+  const url = new URL(`https://api.github.com/users/${encodeURIComponent(login)}`);
+  const response = await githubFetch({
+    url,
+    signal,
+    onProgress,
+    progressCount: 0,
+    rateLimitMode: "fail",
+  });
+  const body = asRecord((await response.json()) as unknown);
+  const createdAt =
+    typeof body?.created_at === "string" ? Date.parse(body.created_at) : Number.NaN;
+  if (!Number.isFinite(createdAt)) {
+    throw new Error("GitHub returned an invalid account creation date.");
+  }
+  return createdAt;
+}
+
+interface TimelineWindow {
+  readonly startMs: number;
+  readonly endMs: number;
+}
+
+function timelineWindows(
+  createdAt: number,
+  now: number,
+  count: number,
+): TimelineWindow[] {
+  const span = Math.max(count, now - createdAt);
+  return Array.from({ length: count }, (_, index) => ({
+    startMs: createdAt + (span * index) / count,
+    endMs: index === count - 1 ? now : createdAt + (span * (index + 1)) / count,
+  }));
+}
+
+function formatSearchDate(timestampMs: number): string {
+  return new Date(timestampMs).toISOString().slice(0, 10);
 }
 
 async function readSearchPage(response: Response): Promise<SearchPage> {

@@ -67,8 +67,8 @@ app.innerHTML = `
           ).join("")}
         </p>
         <p class="control__note control__note--fine">
-          Without a token, a username returns a quick newest-500 preview and never waits for
-          another search window. With a token, GitHub's yearly contribution data supplies
+          Without a token, a username samples up to 500 public commits across the account's
+          lifetime. With a token, GitHub's yearly contribution data supplies
           the longer history in a handful of requests.
         </p>
       </form>
