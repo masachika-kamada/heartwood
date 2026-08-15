@@ -25,8 +25,9 @@ const MAX_THICKNESS = 14;
 const DORMANT_THICKNESS = 0.9;
 const PITH_RADIUS = 6;
 export const CONTOUR_SAMPLES = 180;
-const CONTOUR_STRENGTH = 0.52;
-const CONTOUR_KERNEL_WIDTH = Math.PI / 7;
+const CONTOUR_STRENGTH = 0.11;
+const CONTOUR_KERNEL_WIDTH = Math.PI / 3;
+const INHERITED_SHAPE = 0.96;
 
 /** Above this many periods we switch from monthly to yearly rings. */
 const MONTHLY_RING_LIMIT = 132;
@@ -285,12 +286,23 @@ function growContour(
     return inner.map((radius) => radius + thickness);
   }
 
-  const growth = density.map((value) =>
-    thickness * clamp(1 + CONTOUR_STRENGTH * (value / mean - 1), 0.48, 1.9),
+  // Log compression keeps one very large commit from turning the trunk into a
+  // star. Subtracting the mean changes shape without changing ring volume.
+  const signal = density.map((value) => Math.log1p(value / mean));
+  const signalMean = signal.reduce((sum, value) => sum + value, 0) / signal.length;
+  const growth = signal.map((value) =>
+    thickness *
+    clamp(1 + CONTOUR_STRENGTH * (value - signalMean), 0.86, 1.14),
   );
   const growthMean = growth.reduce((sum, value) => sum + value, 0) / growth.length;
+  const innerMean = inner.reduce((sum, value) => sum + value, 0) / inner.length;
 
-  return inner.map((radius, index) => radius + growth[index]! * (thickness / growthMean));
+  return inner.map(
+    (radius, index) =>
+      innerMean +
+      (radius - innerMean) * INHERITED_SHAPE +
+      growth[index]! * (thickness / growthMean),
+  );
 }
 
 function angularDistance(a: number, b: number): number {
