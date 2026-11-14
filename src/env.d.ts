@@ -18,9 +18,10 @@ interface Window {
   heartwood?: {
     state(): "busy" | "ready" | "error";
     message(): string;
-    png(options?: {
+    image(options?: {
       theme?: "dark" | "light";
       transparent?: boolean;
+      width?: number;
     }): string | null;
   };
 }

@@ -109,13 +109,13 @@ try {
   await mkdir(outDir, { recursive: true });
   for (const theme of ["dark", "light"]) {
     const dataUrl = await page.evaluate(
-      (ink) => window.heartwood.png({ theme: ink, transparent: true }),
+      (ink) => window.heartwood.image({ theme: ink, transparent: true, width: 1000 }),
       theme,
     );
     if (!dataUrl) {
       throw new Error("The page drew nothing.");
     }
-    const file = join(outDir, `${stem}-${theme}.png`);
+    const file = join(outDir, `${stem}-${theme}.webp`);
     await writeFile(file, Buffer.from(dataUrl.split(",")[1], "base64"));
     console.log(`wrote ${file}`);
   }

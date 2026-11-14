@@ -12,7 +12,7 @@ inputs:
     description: Directory the images are written to, relative to the workspace.
     default: heartwood
   name:
-    description: File name stem. The files are `<name>-dark.png` and `<name>-light.png`.
+    description: File name stem. The files are `<name>-dark.webp` and `<name>-light.webp`.
     default: heartwood
   token:
     description: Token used to read the history. The workflow's own token is enough for public activity.

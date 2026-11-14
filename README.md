@@ -133,7 +133,8 @@ server here.
 
 A README cannot run a page, only show an image. So Heartwood can also be run
 as a GitHub Action that draws the trunk on a schedule and commits it as two
-PNGs on a transparent ground, one lettered for dark pages and one for light.
+small WebP images on a transparent ground, one lettered for dark pages and one
+for light.
 There is still no server: the drawing happens in your own workflow.
 
 In the repository whose README should show it — for a profile, the one named
@@ -143,7 +144,7 @@ after your username — add `.github/workflows/heartwood.yml`:
 name: Heartwood
 on:
   schedule:
-    - cron: "17 3 * * *" # once a day
+    - cron: "17 3 * * 1" # once a week
   workflow_dispatch:
 
 permissions:
@@ -171,8 +172,8 @@ Then, in the README:
 ```html
 <a href="https://masachika-kamada.github.io/heartwood/#YOUR-NAME">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="heartwood/heartwood-dark.png">
-    <img src="heartwood/heartwood-light.png" alt="My commit history as growth rings" width="420">
+    <source media="(prefers-color-scheme: dark)" srcset="heartwood/heartwood-dark.webp">
+    <img src="heartwood/heartwood-light.webp" alt="My commit history as growth rings" width="420">
   </picture>
 </a>
 ```

@@ -7,7 +7,7 @@ import { loadGitHubHistory, parseGitHubInput, type GitHubInput } from "./sources
 import { loadGitHubUserHistory } from "./sources/github-user";
 import { loadLocalHistory } from "./sources/git/local";
 import { createTreePainter, type TreePainter } from "./render/rings";
-import { exportTreePng, treePngDataUrl } from "./render/export";
+import { exportTreePng, treeImageDataUrl } from "./render/export";
 import { createInspector } from "./ui/inspector";
 import { INPUT_EXAMPLES } from "./ui/examples";
 import { readingFor } from "./ui/reading";
@@ -522,7 +522,7 @@ window.heartwood = {
         ? "error"
         : "ready",
   message: () => statusEl.textContent ?? "",
-  png: (options) => (currentTree ? treePngDataUrl(currentTree, options) : null),
+  image: (options) => (currentTree ? treeImageDataUrl(currentTree, options) : null),
 };
 
 const linked = linkedName();
