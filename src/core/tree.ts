@@ -33,6 +33,7 @@ import { hashString, mulberry32 } from "./prng";
 const MIN_THICKNESS = 1.6;
 const MAX_THICKNESS = 14;
 const DORMANT_THICKNESS = 0.8;
+const MAX_SILENT_SHARE = 0.2;
 const PITH_RADIUS = 5;
 export const CONTOUR_SAMPLES = 180;
 
@@ -59,6 +60,16 @@ const GRAIN_WOBBLE = 0.032;
  * exact copies of each other pushed outward. Rings in real wood drift.
  */
 const RING_DRIFT = 0.045;
+
+/** Below this share of rings with any activity, the period is too fine. */
+const SPARSE_SHARE = 0.25;
+const MIN_RINGS_WHEN_COARSENED = 12;
+const COARSER: Readonly<Partial<Record<RingPeriod, RingPeriod>>> = {
+  day: "week",
+  week: "month",
+  month: "quarter",
+  quarter: "year",
+};
 
 const DAY_MS = 86_400_000;
 const YEAR_MS = 365 * DAY_MS;
@@ -101,15 +112,39 @@ export function buildTree(history: ActivityHistory, options: TreeBuildOptions = 
 
   const firstActivityMs = activities[0]!.timestampMs;
   const lastActivityMs = activities[activities.length - 1]!.timestampMs;
-  const period =
+  let period =
     options.period ?? choosePeriod(firstActivityMs, lastActivityMs, granularity);
-  const buckets = bucketByPeriod(
+  let buckets = bucketByPeriod(
     activities,
     firstActivityMs,
     lastActivityMs,
     period,
     history.metric,
   );
+
+  // The age of a history says how many rings fit; it does not say they are
+  // used. Three busy days and three months of nothing would be ninety empty
+  // rings around a dot, so a mostly silent trunk is redrawn one step coarser
+  // for as long as that still leaves enough rings to read.
+  while (options.period === undefined) {
+    const active = buckets.filter((bucket) => bucket.activityCount > 0).length;
+    const coarser = COARSER[period];
+    if (active / buckets.length >= SPARSE_SHARE || !coarser) {
+      break;
+    }
+    const fewer = bucketByPeriod(
+      activities,
+      firstActivityMs,
+      lastActivityMs,
+      coarser,
+      history.metric,
+    );
+    if (fewer.length < MIN_RINGS_WHEN_COARSENED) {
+      break;
+    }
+    period = coarser;
+    buckets = fewer;
+  }
 
   const volumes = buckets.map((bucket) => bucket.volume);
   const referenceVolume = percentile(volumes.filter((value) => value > 0), 0.9) || 1;
@@ -129,22 +164,31 @@ export function buildTree(history: ActivityHistory, options: TreeBuildOptions = 
   const leanStrength = LEAN_STRENGTH * (rhythm.observed / (rhythm.observed + 24));
   const driftStrength = RING_DRIFT * clamp(Math.sqrt(buckets.length / 50), 0.2, 1);
 
+  // Silence is drawn as a seam, never as the bulk of the trunk: however many
+  // empty periods there are, together they get at most a fifth of the wood.
+  const thicknessOf = (bucket: Bucket): number =>
+    clamp(
+      MIN_THICKNESS +
+        ((MAX_THICKNESS - MIN_THICKNESS) * Math.log1p(bucket.volume / referenceVolume)) /
+          Math.log1p(3),
+      MIN_THICKNESS,
+      MAX_THICKNESS,
+    );
+  const active = buckets.filter((bucket) => bucket.activityCount > 0);
+  const grown = active.reduce((sum, bucket) => sum + thicknessOf(bucket), 0);
+  const silent = buckets.length - active.length;
+  const dormantThickness =
+    silent === 0
+      ? DORMANT_THICKNESS
+      : Math.min(DORMANT_THICKNESS, (grown * MAX_SILENT_SHARE) / (1 - MAX_SILENT_SHARE) / silent);
+
   const rings: Ring[] = [];
   let contour = wobble.start.map((value) => PITH_RADIUS * (1 + GRAIN_WOBBLE * value));
   let carried = rhythm.overall;
 
   for (const [index, bucket] of buckets.entries()) {
     const dormant = bucket.activityCount === 0;
-    const thickness = dormant
-      ? DORMANT_THICKNESS
-      : clamp(
-          MIN_THICKNESS +
-            (MAX_THICKNESS - MIN_THICKNESS) *
-              Math.log1p(bucket.volume / referenceVolume) /
-              Math.log1p(3),
-          MIN_THICKNESS,
-          MAX_THICKNESS,
-        );
+    const thickness = dormant ? dormantThickness : thicknessOf(bucket);
 
     // A quiet ring has too few events to have a rhythm of its own, so it is
     // pulled toward the whole history; and no ring forgets the one inside it.

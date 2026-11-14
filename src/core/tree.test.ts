@@ -307,9 +307,25 @@ describe("ring period", () => {
           activity({ timestampMs: from + days * DAY }),
         ]),
       );
-      expect(tree.rings.length).toBeGreaterThanOrEqual(13);
+      expect(tree.rings.length).toBeGreaterThanOrEqual(12);
       expect(tree.rings.length).toBeLessThanOrEqual(141);
     }
+  });
+
+  it("steps back from a mostly silent trunk rather than drawing empty rings", () => {
+    // Three busy days, then nothing for three months, then one more day.
+    const burst = [0, 1, 2, 93].flatMap((day) =>
+      Array.from({ length: 3 }, () => activity({ timestampMs: from + day * DAY })),
+    );
+    const sparse = buildTree(history(burst));
+    expect(sparse.period).toBe("week");
+    expect(sparse.rings.length).toBeLessThan(20);
+
+    // The same span, worked on most days, keeps its daily rings.
+    const steady = Array.from({ length: 94 }, (_, day) => day)
+      .filter((day) => day % 3 !== 0)
+      .map((day) => activity({ timestampMs: from + day * DAY }));
+    expect(buildTree(history(steady)).period).toBe("day");
   });
 
   it("starts weekly rings on a Monday", () => {
@@ -318,8 +334,8 @@ describe("ring period", () => {
         activity({ timestampMs: new Date(2024, 0, 3).getTime() }),
         activity({ timestampMs: new Date(2024, 11, 3).getTime() }),
       ]),
+      { period: "week" },
     );
-    expect(tree.period).toBe("week");
     expect(new Date(tree.rings[0]!.startMs).getDay()).toBe(1);
     expect(tree.rings[0]!.label).toBe("Week of 1 Jan 2024");
   });
@@ -330,8 +346,8 @@ describe("ring period", () => {
         activity({ timestampMs: new Date(2022, 5, 10).getTime() }),
         activity({ timestampMs: new Date(2025, 2, 10).getTime() }),
       ]),
+      { period: "month" },
     );
-    expect(tree.period).toBe("month");
     expect(tree.rings.filter((ring) => ring.mark).map((ring) => ring.mark)).toEqual([
       "2023",
       "2024",
@@ -348,7 +364,7 @@ describe("sapwood", () => {
         activity({ timestampMs: new Date(2020, 0, 10).getTime() }),
         activity({ timestampMs: new Date(2024, 5, 10).getTime() }),
       ]),
-      { nowMs: new Date(2024, 6, 1).getTime() },
+      { nowMs: new Date(2024, 6, 1).getTime(), period: "month" },
     );
     expect(tree.rings[0]!.sapwood).toBe(0);
     expect(tree.rings[tree.rings.length - 1]!.sapwood).toBe(1);
