@@ -9,7 +9,8 @@ import { renderTree, type RenderOptions } from "./rings";
 const EXPORT_WIDTH = 1600;
 const EXPORT_HEIGHT = 1800;
 
-export interface ExportOptions extends Pick<RenderOptions, "theme" | "transparent"> {
+export interface ExportOptions
+  extends Pick<RenderOptions, "theme" | "transparent" | "textScale"> {
   /** Pixels across; the height follows. Defaults to a size worth printing. */
   readonly width?: number;
 }
@@ -24,6 +25,7 @@ function drawForExport(tree: TreeModel, options: ExportOptions): HTMLCanvasEleme
   renderTree(canvas, tree, {
     theme: options.theme,
     transparent: options.transparent,
+    textScale: options.textScale,
     pixelRatio: 1,
     showCaption: true,
     annotate: true,

@@ -109,7 +109,7 @@ try {
   await mkdir(outDir, { recursive: true });
   for (const theme of ["dark", "light"]) {
     const dataUrl = await page.evaluate(
-      (ink) => window.heartwood.image({ theme: ink, transparent: true, width: 1000 }),
+      (ink) => window.heartwood.image({ theme: ink, transparent: true, width: 1000, textScale: 1.5 }),
       theme,
     );
     if (!dataUrl) {
@@ -117,6 +117,13 @@ try {
     }
     const file = join(outDir, `${stem}-${theme}.webp`);
     await writeFile(file, Buffer.from(dataUrl.split(",")[1], "base64"));
+    console.log(`wrote ${file}`);
+  }
+  // The same trunk as a map GitHub will draw, and let a visitor click through.
+  const geojson = await page.evaluate(() => window.heartwood.geojson());
+  if (geojson) {
+    const file = join(outDir, `${stem}.geojson`);
+    await writeFile(file, `${geojson}\n`);
     console.log(`wrote ${file}`);
   }
   if (message) {

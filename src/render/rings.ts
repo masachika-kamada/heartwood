@@ -29,6 +29,11 @@ export interface RenderOptions {
   readonly transparent?: boolean;
   /** Draws the dial around the bark and the year marks across the wood. */
   readonly annotate?: boolean;
+  /**
+   * Enlarges the lettering and the dial relative to the trunk, for a picture
+   * that will be shown much smaller than it is drawn, as in a README.
+   */
+  readonly textScale?: number;
   /** 0..1 reveal used by the growth animation. 1 draws everything. */
   readonly reveal?: number;
   /** Defaults to whatever the visitor's system asks for. */
@@ -175,12 +180,12 @@ export function layoutTree(
   tree: TreeModel,
   width: number,
   height: number,
-  options: Pick<RenderOptions, "showCaption" | "annotate"> = {},
+  options: Pick<RenderOptions, "showCaption" | "annotate" | "textScale"> = {},
 ): TreeLayout {
   const showCaption = options.showCaption ?? true;
   const annotate = options.annotate ?? true;
   // A 1600px export should not carry 13px type.
-  const captionScale = Math.max(1, width / 720);
+  const captionScale = Math.max(1, width / 720) * (options.textScale ?? 1);
   const captionSpace = showCaption ? CAPTION_SPACE * captionScale : 0;
   const bark = barkOf(tree);
   const margin = (annotate && tree.dial !== "none" ? 46 : 22) * captionScale;
@@ -235,7 +240,11 @@ export function createTreePainter(
   const height = canvas.clientHeight || canvas.height;
   const showCaption = options.showCaption ?? true;
   const annotate = options.annotate ?? true;
-  const layout = layoutTree(tree, width, height, { showCaption, annotate });
+  const layout = layoutTree(tree, width, height, {
+    showCaption,
+    annotate,
+    textScale: options.textScale,
+  });
 
   canvas.width = Math.max(1, Math.round(width * pixelRatio));
   canvas.height = Math.max(1, Math.round(height * pixelRatio));
@@ -1111,6 +1120,36 @@ export function contourRadiusAtAngle(
   const upper = (lower + 1) % contour.length;
   const fraction = position - Math.floor(position);
   return contour[lower]! + (contour[upper]! - contour[lower]!) * fraction;
+}
+
+/**
+ * One flat colour per ring, as `#rrggbb`: what the ring looks like from far
+ * enough away that its own gradient blurs. For renderers that can only fill.
+ */
+export function ringColours(tree: TreeModel): string[] {
+  const timbers = assignTimbers(tree);
+  return tree.rings.map((ring) => {
+    const tone = toneOf(ring, timbers.get(ring.dominantGroup ?? "") ?? TIMBERS[0]!);
+    let density = 0;
+    for (let step = 0; step < 8; step += 1) {
+      density += densityAt((step + 0.5) / 8, tone.lateShare) / 8;
+    }
+    return hslToHex(mixHsl(tone.early, tone.late, density));
+  });
+}
+
+function hslToHex(colour: Hsl): string {
+  const s = clamp(colour.s, 0, 100) / 100;
+  const l = clamp(colour.l, 0, 100) / 100;
+  const a = s * Math.min(l, 1 - l);
+  const channel = (n: number): string => {
+    const k = (n + colour.h / 30) % 12;
+    const value = l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    return Math.round(value * 255)
+      .toString(16)
+      .padStart(2, "0");
+  };
+  return `#${channel(0)}${channel(8)}${channel(4)}`;
 }
 
 function assignTimbers(tree: TreeModel): Map<string, Hsl> {

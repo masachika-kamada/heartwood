@@ -22,6 +22,8 @@ interface Window {
       theme?: "dark" | "light";
       transparent?: boolean;
       width?: number;
+      textScale?: number;
     }): string | null;
+    geojson(): string | null;
   };
 }
