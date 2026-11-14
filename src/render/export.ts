@@ -9,16 +9,31 @@ import { renderTree, type RenderOptions } from "./rings";
 const EXPORT_WIDTH = 1600;
 const EXPORT_HEIGHT = 1800;
 
-export async function exportTreePng(
-  tree: TreeModel,
-  options: Pick<RenderOptions, "theme"> = {},
-): Promise<void> {
+export type ExportOptions = Pick<RenderOptions, "theme" | "transparent">;
+
+function drawForExport(tree: TreeModel, options: ExportOptions): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
   canvas.width = EXPORT_WIDTH;
   canvas.height = EXPORT_HEIGHT;
   // renderTree measures with clientWidth, which is 0 for a detached canvas, so
   // the intrinsic size is what it falls back to. Keep pixelRatio at 1 here.
-  renderTree(canvas, tree, { ...options, pixelRatio: 1, showCaption: true, annotate: true, reveal: 1 });
+  renderTree(canvas, tree, {
+    ...options,
+    pixelRatio: 1,
+    showCaption: true,
+    annotate: true,
+    reveal: 1,
+  });
+  return canvas;
+}
+
+/** The same picture as a data URL, for a script that wants the bytes. */
+export function treePngDataUrl(tree: TreeModel, options: ExportOptions = {}): string {
+  return drawForExport(tree, options).toDataURL("image/png");
+}
+
+export async function exportTreePng(tree: TreeModel, options: ExportOptions = {}): Promise<void> {
+  const canvas = drawForExport(tree, options);
 
   const blob = await new Promise<Blob | null>((resolve) => {
     canvas.toBlob(resolve, "image/png");

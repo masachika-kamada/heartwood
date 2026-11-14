@@ -14,4 +14,13 @@ interface Window {
   showDirectoryPicker?: (
     options?: DirectoryPickerOptions,
   ) => Promise<FileSystemDirectoryHandle>;
+  /** The hook the image-rendering script drives; see the end of main.ts. */
+  heartwood?: {
+    state(): "busy" | "ready" | "error";
+    message(): string;
+    png(options?: {
+      theme?: "dark" | "light";
+      transparent?: boolean;
+    }): string | null;
+  };
 }

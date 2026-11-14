@@ -7,7 +7,7 @@ import { loadGitHubHistory, parseGitHubInput, type GitHubInput } from "./sources
 import { loadGitHubUserHistory } from "./sources/github-user";
 import { loadLocalHistory } from "./sources/git/local";
 import { createTreePainter, type TreePainter } from "./render/rings";
-import { exportTreePng } from "./render/export";
+import { exportTreePng, treePngDataUrl } from "./render/export";
 import { createInspector } from "./ui/inspector";
 import { INPUT_EXAMPLES } from "./ui/examples";
 import { readingFor } from "./ui/reading";
@@ -508,6 +508,22 @@ window.addEventListener("resize", () => {
     painter?.paint(1);
   });
 });
+
+/**
+ * For `scripts/render.mjs`, which opens this page in a headless browser to
+ * turn a history into image files. It needs to know when the tree has
+ * settled, and to ask for the picture without clicking through a download.
+ */
+window.heartwood = {
+  state: () =>
+    statusEl.dataset.tone === "busy"
+      ? "busy"
+      : statusEl.dataset.tone === "error"
+        ? "error"
+        : "ready",
+  message: () => statusEl.textContent ?? "",
+  png: (options) => (currentTree ? treePngDataUrl(currentTree, options) : null),
+};
 
 const linked = linkedName();
 if (linked) {

@@ -22,6 +22,11 @@ export interface RenderOptions {
   readonly pixelRatio?: number;
   /** Draws the title, dates and summary under the trunk. */
   readonly showCaption?: boolean;
+  /**
+   * Leaves the picture without a ground, for an image that will sit on
+   * somebody else's page. The theme then only decides the colour of the ink.
+   */
+  readonly transparent?: boolean;
   /** Draws the dial around the bark and the year marks across the wood. */
   readonly annotate?: boolean;
   /** 0..1 reveal used by the growth animation. 1 draws everything. */
@@ -256,15 +261,21 @@ export function createTreePainter(
 
       context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
       context.globalAlpha = 1;
-      context.fillStyle = palette.background;
-      context.fillRect(0, 0, width, height);
+      if (options.transparent) {
+        context.clearRect(0, 0, width, height);
+      } else {
+        context.fillStyle = palette.background;
+        context.fillRect(0, 0, width, height);
+      }
 
       if (!trunk) {
         drawEmptyState(context, width, height, palette, tree);
         return;
       }
 
-      drawGlow(context, layout, tree, palette);
+      if (!options.transparent) {
+        drawGlow(context, layout, tree, palette);
+      }
 
       const edge = revealEdge(tree, outerContour, barkEdge, reveal);
 
@@ -479,7 +490,7 @@ function drawWood(
     const tone = toneOf(ring, timbers.get(ring.dominantGroup ?? "") ?? TIMBERS[0]!);
     const bands = ring.dormant
       ? 1
-      : clamp(Math.round((ring.thickness * devicePerWorld) / 1.3), 1, 12);
+      : clamp(Math.round((ring.thickness * devicePerWorld) / 1.3), 1, 200);
 
     for (let band = bands - 1; band >= 0; band -= 1) {
       const outerAt = (band + 1) / bands;

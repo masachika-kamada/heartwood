@@ -1,0 +1,40 @@
+name: Heartwood
+description: Draw a GitHub repository's or person's history as a tree trunk's growth rings, as image files for a README.
+branding:
+  icon: disc
+  color: orange
+
+inputs:
+  target:
+    description: "`owner/repository`, or a username. Defaults to the owner of the repository the workflow runs in."
+    default: ${{ github.repository_owner }}
+  output:
+    description: Directory the images are written to, relative to the workspace.
+    default: heartwood
+  name:
+    description: File name stem. The files are `<name>-dark.png` and `<name>-light.png`.
+    default: heartwood
+  token:
+    description: Token used to read the history. The workflow's own token is enough for public activity.
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+    - name: Build Heartwood
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: |
+        npm ci --no-audit --no-fund
+        npm run build
+    - name: Draw the trunk
+      shell: bash
+      env:
+        HEARTWOOD_TARGET: ${{ inputs.target }}
+        HEARTWOOD_OUT: ${{ github.workspace }}/${{ inputs.output }}
+        HEARTWOOD_NAME: ${{ inputs.name }}
+        HEARTWOOD_TOKEN: ${{ inputs.token }}
+      run: node "${{ github.action_path }}/scripts/render.mjs"

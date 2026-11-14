@@ -129,6 +129,65 @@ access only to count private work. The token is kept in this browser's local
 storage and sent to `api.github.com` and nowhere else, because there is no
 server here.
 
+## On a profile or project README
+
+A README cannot run a page, only show an image. So Heartwood can also be run
+as a GitHub Action that draws the trunk on a schedule and commits it as two
+PNGs on a transparent ground, one lettered for dark pages and one for light.
+There is still no server: the drawing happens in your own workflow.
+
+In the repository whose README should show it — for a profile, the one named
+after your username — add `.github/workflows/heartwood.yml`:
+
+```yaml
+name: Heartwood
+on:
+  schedule:
+    - cron: "17 3 * * *" # once a day
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  grow:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: masachika-kamada/heartwood@main
+        # with:
+        #   target: owner/repository   # default: the owner of this repository
+      - name: Commit the drawing
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add heartwood
+          git diff --cached --quiet || git commit -m "Grow the trunk"
+          git push
+```
+
+Then, in the README:
+
+```html
+<a href="https://masachika-kamada.github.io/heartwood/#YOUR-NAME">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="heartwood/heartwood-dark.png">
+    <img src="heartwood/heartwood-light.png" alt="My commit history as growth rings" width="420">
+  </picture>
+</a>
+```
+
+Run the workflow once by hand from the Actions tab to get the first drawing.
+The workflow's own token reads public activity; to count private work, pass a
+personal token as `token:` from a repository secret.
+
+The same thing from a checkout, for any other use:
+
+```sh
+npm run build
+npm run render -- owner/repository out/      # or a username
+```
+
 ## Running it
 
 ```sh
@@ -166,6 +225,8 @@ src/sources/   where history comes from: local .git, a GitHub repository,
                and the cache of recently read histories
 src/render/    canvas drawing and PNG export
 src/ui/        the hover inspector and the per-tree reading guide
+scripts/       renders a history to image files by driving the built page
+action.yml     the same, as a GitHub Action
 ```
 
 Sources produce an `ActivityHistory`; renderers consume a `TreeModel`. API
