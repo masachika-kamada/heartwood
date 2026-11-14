@@ -38,6 +38,28 @@ export interface ActivityRecord {
   readonly groupKey: string | null;
   /** Present only when one concrete event can become a visible scar. */
   readonly detail: ActivityDetail | null;
+  /**
+   * Hour of the day in the author's own timezone, 0 <= hour < 24. Only sources
+   * that keep the author's UTC offset can say this.
+   */
+  readonly localHour?: number | null;
+  /** Day of the week, 0 = Monday … 6 = Sunday, when the source knows the date. */
+  readonly weekday?: number | null;
+}
+
+/** The finest step of time a source can honestly place an activity in. */
+export type ActivityGranularity = "instant" | "day" | "week";
+
+/** Which daily or weekly cycle is wrapped around the trunk. */
+export type DialKind = "hours" | "weekdays" | "none";
+
+/**
+ * A rhythm measured over the whole history rather than per record, e.g.
+ * GitHub's punch card. `weights` has 24 entries for hours, 7 for weekdays.
+ */
+export interface HistoryRhythm {
+  readonly dial: "hours" | "weekdays";
+  readonly weights: readonly number[];
 }
 
 export interface ActivityHistory {
@@ -49,6 +71,12 @@ export interface ActivityHistory {
   readonly groupKind: ActivityGroupKind;
   readonly truncated: boolean;
   readonly sourceKind: HistorySourceKind;
+  /** Rings are never finer than this. Defaults to "instant". */
+  readonly granularity?: ActivityGranularity;
+  /** Used for the trunk's lean when individual records carry no timing. */
+  readonly rhythm?: HistoryRhythm | null;
+  /** True when some counts are estimates spread over a stretch of time. */
+  readonly estimated?: boolean;
 }
 
 export type HistorySourceKind = "local" | "github" | "demo";
@@ -65,7 +93,7 @@ export interface HistorySource {
  * Derived model: the tree
  * ------------------------------------------------------------------ */
 
-/** One growth ring. By default a ring is a calendar month of activity. */
+/** One growth ring: a day, week, month, quarter or year of activity. */
 export interface Ring {
   readonly index: number;
   /** Inclusive start of the period, epoch ms. */
@@ -80,13 +108,24 @@ export interface Ring {
   /** Largest outer radius after data-driven contour layout, in world units. */
   readonly outerRadius: number;
   /**
-   * Absolute radii sampled clockwise around the ring, starting at 12 o'clock.
-   * Activity timing shapes local growth; every outer ring inherits the wood
-   * already laid down inside it.
+   * Absolute radii from the pith, sampled clockwise starting at 12 o'clock.
+   * A ring is thicker toward the part of the dial where its work happened, so
+   * every ring sits on the wood already laid down inside it.
    */
   readonly contour: readonly number[];
   /** 0..1 share made at night, or null when the source has no time-of-day data. */
   readonly nightRatio: number | null;
+  /** 0..1 share made on Saturday or Sunday, or null when dates are too coarse. */
+  readonly weekendRatio: number | null;
+  /**
+   * 0..1 share of dense, dark wood in this ring: night work when hours are
+   * known, weekend work when only dates are, null when neither is.
+   */
+  readonly shade: number | null;
+  /** 0..1: how much of this ring is living sapwood, i.e. the last year. */
+  readonly sapwood: number;
+  /** Set on the first ring of a calendar year (or month, for daily rings). */
+  readonly mark: string | null;
   readonly groupCount: number;
   readonly dominantGroup: string | null;
   /**
@@ -123,15 +162,27 @@ export interface TreeModel {
   readonly hasOutlierData: boolean;
   readonly truncated: boolean;
   readonly sourceKind: HistorySourceKind;
+  readonly period: RingPeriod;
+  /** The cycle wrapped around the trunk, which decides where it grows thick. */
+  readonly dial: DialKind;
+  /** Share of all activity in each dial bin; empty when there is no dial. */
+  readonly dialWeights: readonly number[];
+  /** What dark wood stands for in this tree. */
+  readonly shadeKind: ShadeKind;
+  readonly estimated: boolean;
 }
+
+export type ShadeKind = "night" | "weekend" | "none";
 
 export interface GroupTally {
   readonly key: string;
   readonly activities: number;
 }
 
-export type RingPeriod = "month" | "year";
+export type RingPeriod = "day" | "week" | "month" | "quarter" | "year";
 
 export interface TreeBuildOptions {
   readonly period?: RingPeriod;
+  /** "Now", for deciding which rings are still sapwood. Defaults to the clock. */
+  readonly nowMs?: number;
 }

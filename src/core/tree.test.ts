@@ -1,11 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { buildTree, clamp, percentile, volumeOf } from "./tree";
+import {
+  buildTree,
+  choosePeriod,
+  clamp,
+  CONTOUR_SAMPLES,
+  dialFraction,
+  percentile,
+  volumeOf,
+} from "./tree";
 import { isNightAt } from "./activity";
 import type {
   ActivityGroupKind,
   ActivityHistory,
   ActivityMetric,
   ActivityRecord,
+  TreeModel,
 } from "./types";
 
 function activity(overrides: Partial<ActivityRecord> = {}): ActivityRecord {
@@ -84,6 +93,7 @@ describe("buildTree", () => {
         activity({ timestampMs: new Date(2024, 0, 10).getTime() }),
         activity({ timestampMs: new Date(2024, 3, 10).getTime() }),
       ]),
+      { period: "month" },
     );
 
     expect(tree.rings).toHaveLength(4);
@@ -116,78 +126,250 @@ describe("buildTree", () => {
         activity({ timestampMs: new Date(2024, 0, 5).getTime(), magnitude: 600 }),
         activity({ timestampMs: new Date(2024, 1, 5).getTime(), magnitude: 2 }),
       ]),
+      { period: "month" },
     );
     expect(tree.rings[0]!.thickness).toBeGreaterThan(tree.rings[1]!.thickness);
   });
 
-  it("derives a repeatable contour directly from activity timing", () => {
-    const input = history([
-      activity({ timestampMs: new Date(2024, 0, 2).getTime(), magnitude: 80 }),
-      activity({ timestampMs: new Date(2024, 0, 3).getTime(), magnitude: 20 }),
-      activity({ timestampMs: new Date(2024, 0, 24).getTime(), magnitude: 10 }),
-    ]);
+  it("never lets one ring cross the one inside it", () => {
+    const tree = buildTree(history(habit(60, () => 23)));
 
-    const first = buildTree(input);
-    const second = buildTree(input);
-    expect(first.rings[0]!.contour).toEqual(second.rings[0]!.contour);
-    expect(new Set(first.rings[0]!.contour).size).toBeGreaterThan(1);
-  });
-
-  it("changes the contour when the activity timing changes", () => {
-    const early = buildTree(
-      history([activity({ timestampMs: new Date(2024, 0, 3).getTime() })]),
-    );
-    const late = buildTree(
-      history([activity({ timestampMs: new Date(2024, 0, 24).getTime() })]),
-    );
-
-    expect(early.rings[0]!.contour).not.toEqual(late.rings[0]!.contour);
-  });
-
-  it("inherits each inner contour into the next ring", () => {
-    const tree = buildTree(
-      history([
-        activity({ timestampMs: new Date(2024, 0, 3).getTime(), magnitude: 100 }),
-        activity({ timestampMs: new Date(2024, 1, 20).getTime(), magnitude: 100 }),
-      ]),
-    );
-
-    for (let sample = 0; sample < tree.rings[0]!.contour.length; sample += 1) {
-      expect(tree.rings[1]!.contour[sample]).toBeGreaterThan(
-        tree.rings[0]!.contour[sample]!,
-      );
+    for (let index = 1; index < tree.rings.length; index += 1) {
+      for (let sample = 0; sample < CONTOUR_SAMPLES; sample += 1) {
+        expect(tree.rings[index]!.contour[sample]).toBeGreaterThan(
+          tree.rings[index - 1]!.contour[sample]!,
+        );
+      }
     }
   });
 
-  it("keeps a long, highly clustered history recognisably round", () => {
-    const activities = Array.from({ length: 60 }, (_, month) =>
-      activity({
-        timestampMs: new Date(2020 + Math.floor(month / 12), month % 12, 2).getTime(),
-        magnitude: month % 8 === 0 ? 20_000 : 100,
-      }),
+  it("draws the same history the same way twice", () => {
+    const input = history(habit(30, (month) => (month % 2 === 0 ? 10 : 22)));
+    const first = buildTree(input, { nowMs: 0 });
+    const second = buildTree(input, { nowMs: 0 });
+    expect(first.rings.map((ring) => ring.contour)).toEqual(
+      second.rings.map((ring) => ring.contour),
     );
-    const tree = buildTree(history(activities));
-    const contour = tree.rings[tree.rings.length - 1]!.contour;
-    const spread = Math.max(...contour) - Math.min(...contour);
+  });
+});
 
-    expect(spread / Math.max(...contour)).toBeLessThan(0.12);
+/** Ten commits a month for `months` months, at whatever hour `hourOf` says. */
+function habit(months: number, hourOf: (month: number) => number): ActivityRecord[] {
+  return Array.from({ length: months }, (_, month) =>
+    Array.from({ length: 10 }, (_unused, day) =>
+      activity({
+        timestampMs: new Date(2018, month, 2 + day).getTime(),
+        localHour: hourOf(month),
+        weekday: day % 7,
+        detail: null,
+      }),
+    ),
+  ).flat();
+}
+
+/** How much further the trunk reaches toward one dial position than its opposite. */
+function leanToward(tree: TreeModel, turn: number): number {
+  const contour = tree.rings[tree.rings.length - 1]!.contour;
+  const toward = contour[Math.round(turn * CONTOUR_SAMPLES) % CONTOUR_SAMPLES]!;
+  const away = contour[Math.round((turn + 0.5) * CONTOUR_SAMPLES) % CONTOUR_SAMPLES]!;
+  return toward / away;
+}
+
+describe("the lean", () => {
+  it("puts noon at the top of the hour dial and the weekend at the bottom of the week", () => {
+    expect(dialFraction("hours", 12)).toBeCloseTo(0);
+    expect(dialFraction("hours", 18)).toBeCloseTo(0.25);
+    expect(dialFraction("hours", 0)).toBeCloseTo(0.5);
+    expect(dialFraction("weekdays", 2)).toBeCloseTo(0);
+    expect((dialFraction("weekdays", 5) + dialFraction("weekdays", 6)) / 2).toBeCloseTo(0.5);
   });
 
-  it("retains a gentle whole-history character in the outer silhouette", () => {
-    const activities = Array.from({ length: 36 }, (_, month) =>
-      activity({
-        timestampMs: new Date(2022 + Math.floor(month / 12), month % 12, 2).getTime(),
-        count: month < 8 ? 8 : 1,
-      }),
-    );
-    const tree = buildTree(history(activities, "commits"));
-    const contour = tree.rings[tree.rings.length - 1]!.contour;
-    const spread = Math.max(...contour) - Math.min(...contour);
+  it("grows the trunk toward the hours the work was done in", () => {
+    const nightOwl = buildTree(history(habit(48, () => 0)));
+    const dayJob = buildTree(history(habit(48, () => 12)));
 
-    expect(spread / Math.max(...contour)).toBeGreaterThan(0.025);
-    expect(spread / Math.max(...contour)).toBeLessThan(0.1);
+    expect(nightOwl.dial).toBe("hours");
+    expect(leanToward(nightOwl, 0.5)).toBeGreaterThan(1.15);
+    expect(leanToward(dayJob, 0)).toBeGreaterThan(1.15);
+    expect(leanToward(dayJob, 0.5)).toBeLessThan(1);
   });
 
+  it("leaves a trunk whose hours are spread evenly close to round", () => {
+    const tree = buildTree(history(habit(48, (month) => (month * 5) % 24)));
+    const contour = tree.rings[tree.rings.length - 1]!.contour;
+    expect(Math.max(...contour) / Math.min(...contour)).toBeLessThan(1.15);
+  });
+
+  it("stays a trunk, not a horn, even when every commit is at the same hour", () => {
+    const tree = buildTree(history(habit(120, () => 3)));
+    const contour = tree.rings[tree.rings.length - 1]!.contour;
+    expect(Math.max(...contour) / Math.min(...contour)).toBeLessThan(1.7);
+  });
+
+  it("moves with a change of habit instead of averaging it away", () => {
+    const tree = buildTree(history(habit(60, (month) => (month < 30 ? 0 : 12))));
+    const thicknessAt = (ringIndex: number, turn: number): number => {
+      const sample = Math.round(turn * CONTOUR_SAMPLES) % CONTOUR_SAMPLES;
+      return (
+        tree.rings[ringIndex]!.contour[sample]! - tree.rings[ringIndex - 1]!.contour[sample]!
+      );
+    };
+
+    // Early rings are thick at midnight (bottom), late ones at noon (top).
+    expect(thicknessAt(20, 0.5)).toBeGreaterThan(thicknessAt(20, 0));
+    expect(thicknessAt(58, 0)).toBeGreaterThan(thicknessAt(58, 0.5));
+  });
+
+  it("falls back to the week when only dates are known", () => {
+    const weekender = Array.from({ length: 200 }, (_, index) =>
+      activity({
+        timestampMs: new Date(2021, 0, 2 + index * 7).getTime(),
+        weekday: index % 2 === 0 ? 5 : 6,
+        nightCount: null,
+        detail: null,
+      }),
+    );
+    const tree = buildTree({ ...history(weekender, "commits"), granularity: "day" });
+
+    expect(tree.dial).toBe("weekdays");
+    expect(leanToward(tree, 0.5)).toBeGreaterThan(1.15);
+    expect(tree.shadeKind).toBe("weekend");
+    expect(tree.rings.find((ring) => !ring.dormant)!.shade).toBe(1);
+  });
+
+  it("uses a whole-history rhythm when records carry no timing at all", () => {
+    const weekly = Array.from({ length: 150 }, (_, week) =>
+      activity({
+        timestampMs: new Date(2020, 0, 6 + week * 7).getTime(),
+        nightCount: null,
+        detail: null,
+      }),
+    );
+    const weights = Array.from({ length: 24 }, (_, hour) => (hour >= 21 ? 50 : 0));
+    const tree = buildTree({
+      ...history(weekly, "commits"),
+      granularity: "week",
+      rhythm: { dial: "hours", weights },
+    });
+
+    expect(tree.dial).toBe("hours");
+    expect(tree.dialWeights.reduce((sum, value) => sum + value, 0)).toBeCloseTo(1);
+    expect(leanToward(tree, dialFraction("hours", 22.5))).toBeGreaterThan(1.15);
+    expect(tree.shadeKind).toBe("none");
+  });
+
+  it("barely leans at all on a handful of commits", () => {
+    const few = buildTree(history(habit(1, () => 0).slice(0, 6)), { period: "day" });
+    const many = buildTree(history(habit(40, () => 0)));
+    expect(leanToward(few, 0.5)).toBeLessThan(1.08);
+    expect(leanToward(many, 0.5)).toBeGreaterThan(leanToward(few, 0.5));
+  });
+
+  it("has no dial, and stays near round, when nothing is known about timing", () => {
+    const tree = buildTree(
+      history(
+        Array.from({ length: 150 }, (_, week) =>
+          activity({ timestampMs: new Date(2020, 0, 6 + week * 7).getTime(), detail: null }),
+        ),
+        "commits",
+      ),
+    );
+    const contour = tree.rings[tree.rings.length - 1]!.contour;
+
+    expect(tree.dial).toBe("none");
+    expect(Math.max(...contour) / Math.min(...contour)).toBeLessThan(1.15);
+    expect(new Set(contour).size).toBeGreaterThan(1);
+  });
+});
+
+describe("ring period", () => {
+  const DAY = 86_400_000;
+  const from = new Date(2020, 0, 1).getTime();
+
+  it("draws a young history close up and an old one from further back", () => {
+    expect(choosePeriod(from, from + 20 * DAY)).toBe("day");
+    expect(choosePeriod(from, from + 400 * DAY)).toBe("week");
+    expect(choosePeriod(from, from + 5 * 365 * DAY)).toBe("month");
+    expect(choosePeriod(from, from + 20 * 365 * DAY)).toBe("quarter");
+    expect(choosePeriod(from, from + 40 * 365 * DAY)).toBe("year");
+  });
+
+  it("never draws rings finer than the source can place an activity", () => {
+    expect(choosePeriod(from, from + 20 * DAY, "week")).toBe("week");
+    expect(choosePeriod(from, from + 20 * DAY, "day")).toBe("day");
+  });
+
+  it("keeps the number of rings readable at every age", () => {
+    for (const days of [30, 100, 101, 800, 801, 4000, 4100, 12_000, 13_000, 20_000]) {
+      const tree = buildTree(
+        history([
+          activity({ timestampMs: from }),
+          activity({ timestampMs: from + days * DAY }),
+        ]),
+      );
+      expect(tree.rings.length).toBeGreaterThanOrEqual(13);
+      expect(tree.rings.length).toBeLessThanOrEqual(141);
+    }
+  });
+
+  it("starts weekly rings on a Monday", () => {
+    const tree = buildTree(
+      history([
+        activity({ timestampMs: new Date(2024, 0, 3).getTime() }),
+        activity({ timestampMs: new Date(2024, 11, 3).getTime() }),
+      ]),
+    );
+    expect(tree.period).toBe("week");
+    expect(new Date(tree.rings[0]!.startMs).getDay()).toBe(1);
+    expect(tree.rings[0]!.label).toBe("Week of 1 Jan 2024");
+  });
+
+  it("marks the ring in which each new year begins", () => {
+    const tree = buildTree(
+      history([
+        activity({ timestampMs: new Date(2022, 5, 10).getTime() }),
+        activity({ timestampMs: new Date(2025, 2, 10).getTime() }),
+      ]),
+    );
+    expect(tree.period).toBe("month");
+    expect(tree.rings.filter((ring) => ring.mark).map((ring) => ring.mark)).toEqual([
+      "2023",
+      "2024",
+      "2025",
+    ]);
+    expect(tree.rings.find((ring) => ring.mark === "2023")!.label).toBe("Jan 2023");
+  });
+});
+
+describe("sapwood", () => {
+  it("is the last twelve months before now, and nothing older", () => {
+    const tree = buildTree(
+      history([
+        activity({ timestampMs: new Date(2020, 0, 10).getTime() }),
+        activity({ timestampMs: new Date(2024, 5, 10).getTime() }),
+      ]),
+      { nowMs: new Date(2024, 6, 1).getTime() },
+    );
+    expect(tree.rings[0]!.sapwood).toBe(0);
+    expect(tree.rings[tree.rings.length - 1]!.sapwood).toBe(1);
+    const living = tree.rings.filter((ring) => ring.sapwood > 0).length;
+    expect(living).toBeGreaterThanOrEqual(12);
+    expect(living).toBeLessThanOrEqual(15);
+  });
+
+  it("is absent from a history nobody has touched for years", () => {
+    const tree = buildTree(
+      history([
+        activity({ timestampMs: new Date(2015, 0, 10).getTime() }),
+        activity({ timestampMs: new Date(2018, 5, 10).getTime() }),
+      ]),
+      { nowMs: new Date(2024, 6, 1).getTime() },
+    );
+    expect(tree.rings.every((ring) => ring.sapwood === 0)).toBe(true);
+  });
+});
+
+describe("buildTree: measures", () => {
   it("accepts an already-aggregated contribution record", () => {
     const tree = buildTree(
       history(
@@ -206,15 +388,6 @@ describe("buildTree", () => {
     expect(tree.totalActivities).toBe(37);
     expect(tree.rings[0]!.activityCount).toBe(37);
     expect(tree.rings[0]!.volume).toBe(37);
-  });
-
-  it("switches to yearly rings for very long histories", () => {
-    const activities = Array.from({ length: 60 }, (_, index) =>
-      activity({ timestampMs: new Date(2000 + index / 4, (index * 3) % 12, 5).getTime() }),
-    );
-    const tree = buildTree(history(activities));
-    expect(tree.rings.length).toBeLessThan(40);
-    expect(tree.rings[0]!.label).toMatch(/^\d{4}$/);
   });
 
   it("ranks groups by represented activity count", () => {
@@ -244,10 +417,46 @@ describe("buildTree", () => {
       }),
     ];
 
-    const first = buildTree(history(activities));
-    const second = buildTree(history(activities));
+    const first = buildTree(history(activities), { period: "month" });
+    const second = buildTree(history(activities), { period: "month" });
     expect(first.rings[0]!.scars).toEqual(second.rings[0]!.scars);
     expect(first.rings[0]!.scars[0]!.summary).toBe("The big one");
+  });
+
+  it("places a scar at the hour it happened, on the hour dial", () => {
+    const activities = [
+      ...habit(12, () => 14).map((record, index) => ({
+        ...record,
+        detail: { id: `ordinary-${index}`, summary: "Routine" },
+      })),
+      activity({
+        timestampMs: new Date(2018, 5, 20).getTime(),
+        magnitude: 12_000,
+        localHour: 0,
+        weekday: 2,
+        detail: { id: "rewrite", summary: "The big one" },
+      }),
+    ];
+    const tree = buildTree(history(activities));
+    const scar = tree.rings.flatMap((ring) => ring.scars)[0]!;
+    // Midnight is at the bottom, which is +PI/2 in canvas angles.
+    expect(scar.angle).toBeCloseTo(Math.PI / 2, 5);
+  });
+
+  it("does not scratch the trunk with changes dwarfed by the largest", () => {
+    const activities = [
+      ...Array.from({ length: 40 }, (_, index) =>
+        activity({
+          timestampMs: new Date(2024, 0, 5).getTime(),
+          magnitude: 12,
+          detail: { id: `ordinary-${index}`, summary: "Routine" },
+        }),
+      ),
+      activity({ magnitude: 900, detail: { id: "medium", summary: "Medium" } }),
+      activity({ magnitude: 40_000, detail: { id: "huge", summary: "Huge" } }),
+    ];
+    const tree = buildTree(history(activities));
+    expect(tree.rings.flatMap((ring) => ring.scars).map((scar) => scar.id)).toEqual(["huge"]);
   });
 
   it("keeps scars rare", () => {

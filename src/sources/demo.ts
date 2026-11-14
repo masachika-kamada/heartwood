@@ -8,7 +8,6 @@
  */
 
 import type { ActivityHistory, ActivityRecord } from "../core/types";
-import { isNightAt } from "../core/activity";
 import { hashString, mulberry32 } from "../core/prng";
 
 interface Chapter {
@@ -21,24 +20,24 @@ interface Chapter {
 }
 
 const CAST = [
-  { email: "wren@example.com", tzOffsetMinutes: 540 },
-  { email: "ansel@example.com", tzOffsetMinutes: -300 },
-  { email: "margot@example.com", tzOffsetMinutes: 60 },
+  { email: "wren@example.com" },
+  { email: "ansel@example.com" },
+  { email: "margot@example.com" },
 ];
 
 const CHAPTERS: readonly Chapter[] = [
-  { months: 8, commitsPerMonth: 34, churnScale: 1.5, nightBias: 0.62, authors: [0] },
-  { months: 6, commitsPerMonth: 22, churnScale: 0.8, nightBias: 0.34, authors: [0, 1] },
+  { months: 9, commitsPerMonth: 34, churnScale: 1.5, nightBias: 0.72, authors: [0] },
+  { months: 8, commitsPerMonth: 22, churnScale: 0.8, nightBias: 0.4, authors: [0, 1] },
   { months: 5, commitsPerMonth: 1, churnScale: 0.2, nightBias: 0.1, authors: [0] },
   {
-    months: 4,
+    months: 5,
     commitsPerMonth: 40,
     churnScale: 2.4,
-    nightBias: 0.55,
+    nightBias: 0.5,
     authors: [0, 1, 2],
     rewriteInFinalMonth: true,
   },
-  { months: 9, commitsPerMonth: 12, churnScale: 0.6, nightBias: 0.2, authors: [1, 2] },
+  { months: 15, commitsPerMonth: 14, churnScale: 0.6, nightBias: 0.12, authors: [1, 2] },
 ];
 
 const SUMMARIES = [
@@ -57,7 +56,7 @@ export function createDemoHistory(): ActivityHistory {
   const activities: ActivityRecord[] = [];
 
   const start = new Date();
-  start.setFullYear(start.getFullYear() - 3, start.getMonth(), 1);
+  start.setFullYear(start.getFullYear() - 3, start.getMonth() - 6, 1);
   start.setHours(0, 0, 0, 0);
 
   let monthCursor = 0;
@@ -78,7 +77,9 @@ export function createDemoHistory(): ActivityHistory {
         date.setDate(1 + Math.floor(random() * 27));
 
         const atNight = random() < chapter.nightBias;
-        date.setHours(atNight ? (random() < 0.5 ? 23 : 2) : 10 + Math.floor(random() * 8));
+        date.setHours(
+          atNight ? [22, 23, 0, 1, 2][Math.floor(random() * 5)]! : 9 + Math.floor(random() * 10),
+        );
         date.setMinutes(Math.floor(random() * 60));
 
         const magnitude = Math.round(
@@ -92,9 +93,11 @@ export function createDemoHistory(): ActivityHistory {
           timestampMs: date.getTime(),
           count: 1,
           magnitude: magnitude + deletions,
-          nightCount: isNightAt(date.getTime(), author.tzOffsetMinutes) ? 1 : 0,
+          nightCount: atNight ? 1 : 0,
           groupKey: author.email,
           detail: { id, summary },
+          localHour: date.getHours() + date.getMinutes() / 60,
+          weekday: (date.getDay() + 6) % 7,
         });
       }
 
@@ -111,6 +114,8 @@ export function createDemoHistory(): ActivityHistory {
           nightCount: 1,
           groupKey: CAST[0]!.email,
           detail: { id, summary: "Replace the rendering layer entirely" },
+          localHour: 3 + 14 / 60,
+          weekday: (date.getDay() + 6) % 7,
         });
       }
     }

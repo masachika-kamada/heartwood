@@ -2,39 +2,81 @@
  * Turns activity records into the geometry of a tree trunk cross-section.
  *
  * The mapping, in one place so it can be argued with:
- *   - one calendar period (month, or year for long histories) = one ring
+ *   - one period (day, week, month, quarter or year, chosen so that a young
+ *     history and an old one both make a readable trunk) = one ring
  *   - ring thickness  <- the history's declared metric, damped by a log curve
- *   - ring contour    <- when activity happened inside that period
- *   - ring darkness   <- share made at night, when the source knows it
+ *   - where it is thick <- the hours (or weekdays) the work was done in. The
+ *     dial is fixed, so a habit kept for years adds up to a trunk that leans
+ *   - dense dark wood <- share made at night, or at weekends when only dates
+ *     are known
  *   - ring hue        <- the group that dominated that period
+ *   - pale outer band <- the last twelve months: sapwood, still alive
  *   - pinched ring    <- a period with no activity at all
  *   - a scar          <- one measured change far larger than its neighbours
  */
 
 import type {
+  ActivityGranularity,
   ActivityHistory,
   ActivityRecord,
+  DialKind,
   GroupTally,
   Ring,
+  RingPeriod,
   RingScar,
+  ShadeKind,
   TreeBuildOptions,
   TreeModel,
 } from "./types";
+import { hashString, mulberry32 } from "./prng";
+
 const MIN_THICKNESS = 1.6;
 const MAX_THICKNESS = 14;
-const DORMANT_THICKNESS = 0.9;
-const PITH_RADIUS = 6;
+const DORMANT_THICKNESS = 0.8;
+const PITH_RADIUS = 5;
 export const CONTOUR_SAMPLES = 180;
-const CONTOUR_STRENGTH = 0.04;
-const CONTOUR_KERNEL_WIDTH = Math.PI / 3;
-const INHERITED_SHAPE = 0.96;
-const TRUNK_CHARACTER = 0.035;
 
-/** Above this many periods we switch from monthly to yearly rings. */
-const MONTHLY_RING_LIMIT = 132;
+/**
+ * How far the rhythm may pull one ring out of round. A ring is at most this
+ * much thicker on its busy side and thinner on its quiet one, which over a
+ * whole trunk moves the pith visibly off-centre without ever making a blob.
+ */
+const LEAN_STRENGTH = 0.2;
+/** Rings with fewer activities than this mostly follow the whole-history rhythm. */
+const RHYTHM_PRIOR = 10;
+/** How quickly a change of habit shows; the rest is carried over from the ring inside. */
+const RHYTHM_FOLLOW = 0.45;
+/** Width of the brush that spreads one dial bin around the trunk. */
+const RHYTHM_SHARPNESS = 4;
+/**
+ * Grain, not data: a few low waves, seeded by the name, so that two trunks
+ * with the same rhythm are still two different pieces of wood. Small enough
+ * that the lean above is always the larger effect.
+ */
+const GRAIN_WOBBLE = 0.032;
+/**
+ * And a smaller, different wave in every ring, so that neighbours are not
+ * exact copies of each other pushed outward. Rings in real wood drift.
+ */
+const RING_DRIFT = 0.045;
+
+const DAY_MS = 86_400_000;
+const YEAR_MS = 365 * DAY_MS;
+const SAPWOOD_FADE_MS = 90 * DAY_MS;
+
+/**
+ * A sampled history knows the hour of only some of its activities. A fifth of
+ * them is still plenty to read a daily rhythm from; rings with none of their
+ * own simply follow the whole history's.
+ */
+const RHYTHM_COVERAGE = 0.2;
+
+const HOURS = 24;
+const WEEKDAYS = 7;
 
 export function buildTree(history: ActivityHistory, options: TreeBuildOptions = {}): TreeModel {
   const activities = [...history.activities].sort((a, b) => a.timestampMs - b.timestampMs);
+  const granularity = history.granularity ?? "instant";
   if (activities.length === 0) {
     return {
       name: history.name,
@@ -49,12 +91,18 @@ export function buildTree(history: ActivityHistory, options: TreeBuildOptions = 
       hasOutlierData: false,
       truncated: history.truncated,
       sourceKind: history.sourceKind,
+      period: options.period ?? "month",
+      dial: "none",
+      dialWeights: [],
+      shadeKind: "none",
+      estimated: history.estimated === true,
     };
   }
 
   const firstActivityMs = activities[0]!.timestampMs;
   const lastActivityMs = activities[activities.length - 1]!.timestampMs;
-  const period = options.period ?? choosePeriod(firstActivityMs, lastActivityMs);
+  const period =
+    options.period ?? choosePeriod(firstActivityMs, lastActivityMs, granularity);
   const buckets = bucketByPeriod(
     activities,
     firstActivityMs,
@@ -65,11 +113,25 @@ export function buildTree(history: ActivityHistory, options: TreeBuildOptions = 
 
   const volumes = buckets.map((bucket) => bucket.volume);
   const referenceVolume = percentile(volumes.filter((value) => value > 0), 0.9) || 1;
-  const scarsByBucket = chooseScars(buckets, activities, history.metric);
-  const historyProfile = buildHistoryProfile(activities, firstActivityMs, lastActivityMs);
+  const rhythm = measureRhythm(history, activities, buckets);
+  const scarsByBucket = chooseScars(buckets, activities, history.metric, rhythm.dial);
+  const wobble = grainWobble(history.name);
+  const hasNightData = activities.some((activity) => activity.nightCount !== null);
+  const shadeKind: ShadeKind = hasNightData
+    ? "night"
+    : rhythm.weekdayCoverage >= RHYTHM_COVERAGE && granularity !== "week"
+      ? "weekend"
+      : "none";
+  const nowMs = options.nowMs ?? Date.now();
+  // A dozen commits are not yet a habit, and three rings cannot average out
+  // their own irregularities the way a hundred do. Both effects are eased in,
+  // so a very young trunk is plain rather than lumpy.
+  const leanStrength = LEAN_STRENGTH * (rhythm.observed / (rhythm.observed + 24));
+  const driftStrength = RING_DRIFT * clamp(Math.sqrt(buckets.length / 50), 0.2, 1);
 
   const rings: Ring[] = [];
-  let contour = historyProfile.map((factor) => PITH_RADIUS * factor);
+  let contour = wobble.start.map((value) => PITH_RADIUS * (1 + GRAIN_WOBBLE * value));
+  let carried = rhythm.overall;
 
   for (const [index, bucket] of buckets.entries()) {
     const dormant = bucket.activityCount === 0;
@@ -84,15 +146,33 @@ export function buildTree(history: ActivityHistory, options: TreeBuildOptions = 
           MAX_THICKNESS,
         );
 
-    contour = growContour(
-      contour,
-      bucket,
-      thickness,
-      history.metric,
-      historyProfile,
+    // A quiet ring has too few events to have a rhythm of its own, so it is
+    // pulled toward the whole history; and no ring forgets the one inside it.
+    if (rhythm.dial !== "none" && !dormant) {
+      const own = blendWithPrior(rhythm.perBucket[index]!, rhythm.overall);
+      carried = carried.map(
+        (value, bin) => value + (own[bin]! - value) * RHYTHM_FOLLOW,
+      );
+    }
+
+    const progress = buckets.length === 1 ? 0 : index / (buckets.length - 1);
+    const growth = growthProfile(
+      rhythm.dial === "none" || dormant ? null : carried,
+      rhythm.kernel,
+      wobble,
+      progress,
+      leanStrength,
+      driftStrength,
     );
+    contour = contour.map((radius, sample) => radius + thickness * growth[sample]!);
 
     const dominant = dominantOf(bucket.groups);
+    const nightRatio =
+      bucket.timedActivityCount === 0 ? null : bucket.nightCount / bucket.timedActivityCount;
+    const weekendRatio =
+      bucket.datedActivityCount === 0 || granularity === "week"
+        ? null
+        : bucket.weekendCount / bucket.datedActivityCount;
 
     rings.push({
       index,
@@ -104,8 +184,12 @@ export function buildTree(history: ActivityHistory, options: TreeBuildOptions = 
       thickness,
       outerRadius: Math.max(...contour),
       contour,
-      nightRatio:
-        bucket.timedActivityCount === 0 ? null : bucket.nightCount / bucket.timedActivityCount,
+      nightRatio,
+      weekendRatio,
+      shade:
+        shadeKind === "night" ? nightRatio : shadeKind === "weekend" ? weekendRatio : null,
+      sapwood: clamp((bucket.endMs - (nowMs - YEAR_MS)) / SAPWOOD_FADE_MS, 0, 1),
+      mark: index === 0 ? null : markFor(buckets[index - 1]!, bucket, period),
       groupCount: bucket.groups.size,
       dominantGroup: dominant.key,
       dominantShare:
@@ -124,12 +208,17 @@ export function buildTree(history: ActivityHistory, options: TreeBuildOptions = 
     metric: history.metric,
     groupKind: history.groupKind,
     groups: tallyGroups(activities),
-    hasNightData: activities.some((activity) => activity.nightCount !== null),
+    hasNightData,
     hasOutlierData:
       history.metric === "lines" &&
       activities.some((activity) => activity.magnitude !== null && activity.detail !== null),
     truncated: history.truncated,
     sourceKind: history.sourceKind,
+    period,
+    dial: rhythm.dial,
+    dialWeights: rhythm.dial === "none" ? [] : rhythm.overall,
+    shadeKind,
+    estimated: history.estimated === true,
   };
 }
 
@@ -145,23 +234,45 @@ interface Bucket {
   volume: number;
   nightCount: number;
   timedActivityCount: number;
+  weekendCount: number;
+  datedActivityCount: number;
   readonly groups: Map<string, number>;
 }
 
-export function choosePeriod(firstMs: number, lastMs: number): "month" | "year" {
+/**
+ * Picks the ring period from the length of the history, so that the trunk has
+ * somewhere between a dozen and about a hundred and forty rings whether it is
+ * a month old or thirty years old. A young history is not drawn thinner than
+ * an old one; it is drawn closer up.
+ */
+export function choosePeriod(
+  firstMs: number,
+  lastMs: number,
+  granularity: ActivityGranularity = "instant",
+): RingPeriod {
+  const days = (lastMs - firstMs) / DAY_MS;
+  if (granularity !== "week" && days <= 100) {
+    return "day";
+  }
+  if (days <= 800) {
+    return "week";
+  }
   const months = monthsBetween(new Date(firstMs), new Date(lastMs));
-  return months > MONTHLY_RING_LIMIT ? "year" : "month";
+  if (months <= 132) {
+    return "month";
+  }
+  return months <= 420 ? "quarter" : "year";
 }
 
 function bucketByPeriod(
   activities: readonly ActivityRecord[],
   firstMs: number,
   lastMs: number,
-  period: "month" | "year",
+  period: RingPeriod,
   metric: ActivityHistory["metric"],
 ): Bucket[] {
   const buckets: Bucket[] = [];
-  const keyed = new Map<string, Bucket>();
+  const keyed = new Map<number, Bucket>();
 
   let cursor = startOfPeriod(new Date(firstMs), period);
   const end = startOfPeriod(new Date(lastMs), period);
@@ -177,16 +288,17 @@ function bucketByPeriod(
       volume: 0,
       nightCount: 0,
       timedActivityCount: 0,
+      weekendCount: 0,
+      datedActivityCount: 0,
       groups: new Map(),
     };
     buckets.push(bucket);
-    keyed.set(periodKey(cursor, period), bucket);
+    keyed.set(bucket.startMs, bucket);
     cursor = next;
   }
 
   for (const activity of activities) {
-    const key = periodKey(startOfPeriod(new Date(activity.timestampMs), period), period);
-    const bucket = keyed.get(key);
+    const bucket = keyed.get(startOfPeriod(new Date(activity.timestampMs), period).getTime());
     if (!bucket) {
       continue;
     }
@@ -196,6 +308,12 @@ function bucketByPeriod(
     if (activity.nightCount !== null) {
       bucket.nightCount += activity.nightCount;
       bucket.timedActivityCount += activity.count;
+    }
+    if (activity.weekday !== null && activity.weekday !== undefined) {
+      bucket.datedActivityCount += activity.count;
+      if (activity.weekday >= 5) {
+        bucket.weekendCount += activity.count;
+      }
     }
     if (activity.groupKey) {
       bucket.groups.set(
@@ -208,31 +326,78 @@ function bucketByPeriod(
   return buckets;
 }
 
-function startOfPeriod(date: Date, period: "month" | "year"): Date {
-  return period === "year"
-    ? new Date(date.getFullYear(), 0, 1)
-    : new Date(date.getFullYear(), date.getMonth(), 1);
-}
-
-function advancePeriod(date: Date, period: "month" | "year"): Date {
-  return period === "year"
-    ? new Date(date.getFullYear() + 1, 0, 1)
-    : new Date(date.getFullYear(), date.getMonth() + 1, 1);
-}
-
-function periodKey(date: Date, period: "month" | "year"): string {
-  return period === "year"
-    ? String(date.getFullYear())
-    : `${date.getFullYear()}-${date.getMonth()}`;
-}
-
-function formatPeriod(ms: number, period: "month" | "year"): string {
-  const date = new Date(ms);
-  if (period === "year") {
-    return String(date.getFullYear());
+function startOfPeriod(date: Date, period: RingPeriod): Date {
+  const year = date.getFullYear();
+  const month = date.getMonth();
+  switch (period) {
+    case "day":
+      return new Date(year, month, date.getDate());
+    case "week":
+      // Weeks start on Monday, so a weekend is never split across two rings.
+      return new Date(year, month, date.getDate() - ((date.getDay() + 6) % 7));
+    case "month":
+      return new Date(year, month, 1);
+    case "quarter":
+      return new Date(year, month - (month % 3), 1);
+    case "year":
+      return new Date(year, 0, 1);
   }
+}
+
+function advancePeriod(date: Date, period: RingPeriod): Date {
+  const year = date.getFullYear();
+  const month = date.getMonth();
+  const day = date.getDate();
+  switch (period) {
+    case "day":
+      return new Date(year, month, day + 1);
+    case "week":
+      return new Date(year, month, day + 7);
+    case "month":
+      return new Date(year, month + 1, 1);
+    case "quarter":
+      return new Date(year, month + 3, 1);
+    case "year":
+      return new Date(year + 1, 0, 1);
+  }
+}
+
+function formatPeriod(ms: number, period: RingPeriod): string {
+  const date = new Date(ms);
+  const year = date.getFullYear();
   const month = date.toLocaleString("en", { month: "short" });
-  return `${month} ${date.getFullYear()}`;
+  switch (period) {
+    case "day":
+      return `${date.getDate()} ${month} ${year}`;
+    case "week":
+      return `Week of ${date.getDate()} ${month} ${year}`;
+    case "month":
+      return `${month} ${year}`;
+    case "quarter":
+      return `Q${Math.floor(date.getMonth() / 3) + 1} ${year}`;
+    case "year":
+      return String(year);
+  }
+}
+
+/**
+ * The label for the boundary a ring begins at, where that boundary is worth a
+ * tick on the ruler: a new year, or a new month when rings are days.
+ */
+function markFor(previous: Bucket, bucket: Bucket, period: RingPeriod): string | null {
+  // The last instant of a period says which year it reaches into, which is
+  // what puts the mark on the week that contains the first of January.
+  const before = new Date(previous.endMs - 1);
+  const now = new Date(bucket.endMs - 1);
+  if (period === "day") {
+    return before.getMonth() === now.getMonth()
+      ? null
+      : now.toLocaleString("en", { month: "short" });
+  }
+  if (period === "year") {
+    return now.getFullYear() % 5 === 0 ? String(now.getFullYear()) : null;
+  }
+  return before.getFullYear() === now.getFullYear() ? null : String(now.getFullYear());
 }
 
 function monthsBetween(from: Date, to: Date): number {
@@ -254,124 +419,243 @@ export function volumeOf(
   return metric === "lines" ? (activity.magnitude ?? 0) : activity.count;
 }
 
-/**
- * Activity timestamps become positions around the cross-section: the start of
- * a month/year is at 12 o'clock and time advances clockwise. Concentrated work
- * produces a local bulge, while steady work produces a rounder ring.
- */
-function growContour(
-  inner: readonly number[],
-  bucket: Bucket,
-  thickness: number,
-  metric: ActivityHistory["metric"],
-  historyProfile: readonly number[],
-): number[] {
-  if (bucket.activityCount === 0) {
-    return inner.map(
-      (radius, index) => radius + thickness * historyProfile[index]!,
-    );
-  }
-
-  const density = Array<number>(CONTOUR_SAMPLES).fill(0);
-  const periodDuration = bucket.endMs - bucket.startMs;
-
-  for (const activity of bucket.activities) {
-    const eventAngle =
-      ((activity.timestampMs - bucket.startMs) / periodDuration) * Math.PI * 2;
-    const weight = Math.max(0, volumeOf(activity, metric));
-    if (weight === 0) {
-      continue;
-    }
-    for (let sample = 0; sample < CONTOUR_SAMPLES; sample += 1) {
-      const sampleAngle = (sample / CONTOUR_SAMPLES) * Math.PI * 2;
-      const distance = angularDistance(sampleAngle, eventAngle);
-      if (distance <= CONTOUR_KERNEL_WIDTH) {
-        const proximity = 1 - distance / CONTOUR_KERNEL_WIDTH;
-        density[sample] += weight * proximity * proximity;
-      }
-    }
-  }
-
-  const mean = density.reduce((sum, value) => sum + value, 0) / density.length;
-  if (mean === 0) {
-    return inner.map(
-      (radius, index) => radius + thickness * historyProfile[index]!,
-    );
-  }
-
-  // Log compression keeps one very large commit from turning the trunk into a
-  // star. Subtracting the mean changes shape without changing ring volume.
-  const signal = density.map((value) => Math.log1p(value / mean));
-  const signalMean = signal.reduce((sum, value) => sum + value, 0) / signal.length;
-  const growth = signal.map((value) =>
-    thickness *
-    clamp(1 + CONTOUR_STRENGTH * (value - signalMean), 0.86, 1.14),
-  );
-  const growthMean = growth.reduce((sum, value) => sum + value, 0) / growth.length;
-  const innerMean = inner.reduce((sum, value) => sum + value, 0) / inner.length;
-
-  return inner.map(
-    (radius, index) => {
-      const profile = historyProfile[index]!;
-      const expectedInner = innerMean * profile;
-      return (
-        expectedInner +
-        (radius - expectedInner) * INHERITED_SHAPE +
-        growth[index]! * profile * (thickness / growthMean)
-      );
-    },
-  );
-}
-
-function angularDistance(a: number, b: number): number {
-  const difference = Math.abs(a - b) % (Math.PI * 2);
-  return Math.min(difference, Math.PI * 2 - difference);
-}
+/* ------------------------------------------------------------------ *
+ * Rhythm: which way the trunk leans
+ * ------------------------------------------------------------------ */
 
 /**
- * A low-frequency signature of the whole history. Its phases come directly
- * from when work occurred, while a fixed small amplitude keeps the result as
- * gently organic as the original renderer rather than visibly chart-like.
+ * Where a moment on the dial sits around the trunk, as a fraction of a turn
+ * clockwise from the top. Both dials put the middle of ordinary working time
+ * at the top and time off at the bottom: noon up and midnight down, Wednesday
+ * up and the weekend down. A trunk that is heavy underneath was built after
+ * hours, whichever dial drew it.
  */
-function buildHistoryProfile(
+export function dialFraction(dial: DialKind, position: number): number {
+  if (dial === "hours") {
+    return wrapUnit((position - 12) / HOURS);
+  }
+  if (dial === "weekdays") {
+    return wrapUnit((position - 2) / WEEKDAYS);
+  }
+  return 0;
+}
+
+interface Rhythm {
+  readonly dial: DialKind;
+  /** Share of activity per dial bin over the whole history. Sums to 1. */
+  readonly overall: readonly number[];
+  /** Raw activity counts per dial bin, one row per bucket. */
+  readonly perBucket: readonly (readonly number[])[];
+  /** How much each dial bin feeds each contour sample. */
+  readonly kernel: readonly (readonly number[])[];
+  /** Share of activity whose weekday is known, for deciding on weekend shade. */
+  readonly weekdayCoverage: number;
+  /** How many activities the rhythm was measured from. */
+  readonly observed: number;
+}
+
+function measureRhythm(
+  history: ActivityHistory,
   activities: readonly ActivityRecord[],
-  firstMs: number,
-  lastMs: number,
-): number[] {
-  const span = Math.max(1, lastMs - firstMs);
-  const totalWeight = activities.reduce((sum, activity) => sum + activity.count, 0) || 1;
-  const harmonics = [2, 3, 4].map((frequency) => {
-    let cosine = 0;
-    let sine = 0;
-    for (const activity of activities) {
-      const angle = ((activity.timestampMs - firstMs) / span) * Math.PI * 2;
-      cosine += Math.cos(angle * frequency) * activity.count;
-      sine += Math.sin(angle * frequency) * activity.count;
+  buckets: readonly Bucket[],
+): Rhythm {
+  let total = 0;
+  let withHour = 0;
+  let withWeekday = 0;
+  for (const activity of activities) {
+    total += activity.count;
+    if (typeof activity.localHour === "number") {
+      withHour += activity.count;
     }
-    return {
-      frequency,
-      cosine: cosine / totalWeight / frequency,
-      sine: sine / totalWeight / frequency,
-    };
-  });
+    if (typeof activity.weekday === "number") {
+      withWeekday += activity.count;
+    }
+  }
+  const weekdayCoverage = total === 0 ? 0 : withWeekday / total;
+  const none: Rhythm = {
+    dial: "none",
+    overall: [],
+    perBucket: [],
+    kernel: [],
+    weekdayCoverage,
+    observed: 0,
+  };
+  if (total === 0) {
+    return none;
+  }
 
-  const signature = Array.from({ length: CONTOUR_SAMPLES }, (_, sample) => {
+  // Hours beat weekdays, and a reading taken from each record beats one taken
+  // over the whole history, because only the former can change ring by ring.
+  const measuredDial: DialKind =
+    withHour / total >= RHYTHM_COVERAGE
+      ? "hours"
+      : history.rhythm?.dial === "hours"
+        ? "none"
+        : weekdayCoverage >= RHYTHM_COVERAGE && history.granularity !== "week"
+          ? "weekdays"
+          : "none";
+
+  if (measuredDial === "none") {
+    const given = history.rhythm;
+    const sum = given?.weights.reduce((acc, value) => acc + Math.max(0, value), 0) ?? 0;
+    if (!given || sum <= 0 || given.weights.length !== binsOf(given.dial)) {
+      return none;
+    }
+    const overall = given.weights.map((value) => Math.max(0, value) / sum);
+    return {
+      dial: given.dial,
+      overall,
+      // Nothing is known per ring, so every ring grows to the same rhythm.
+      perBucket: buckets.map(() => Array<number>(overall.length).fill(0)),
+      kernel: dialKernel(given.dial),
+      weekdayCoverage,
+      observed: sum,
+    };
+  }
+
+  const bins = binsOf(measuredDial);
+  const totals = Array<number>(bins).fill(0);
+  const perBucket = buckets.map((bucket) => {
+    const counts = Array<number>(bins).fill(0);
+    for (const activity of bucket.activities) {
+      const position = measuredDial === "hours" ? activity.localHour : activity.weekday;
+      if (typeof position !== "number" || !Number.isFinite(position)) {
+        continue;
+      }
+      const bin = clamp(Math.floor(position), 0, bins - 1);
+      counts[bin] += activity.count;
+      totals[bin] += activity.count;
+    }
+    return counts;
+  });
+  const sum = totals.reduce((acc, value) => acc + value, 0) || 1;
+
+  return {
+    dial: measuredDial,
+    overall: totals.map((value) => value / sum),
+    perBucket,
+    kernel: dialKernel(measuredDial),
+    weekdayCoverage,
+    observed: sum,
+  };
+}
+
+function binsOf(dial: DialKind): number {
+  return dial === "hours" ? HOURS : dial === "weekdays" ? WEEKDAYS : 0;
+}
+
+/** One ring's own distribution, steadied by the whole history's. */
+function blendWithPrior(counts: readonly number[], overall: readonly number[]): number[] {
+  const observed = counts.reduce((sum, value) => sum + value, 0);
+  return counts.map(
+    (value, bin) => (value + RHYTHM_PRIOR * overall[bin]!) / (observed + RHYTHM_PRIOR),
+  );
+}
+
+/**
+ * A wide, smooth brush for each dial bin. Wide on purpose: the eye reads a
+ * trunk with one or two soft lobes as wood, and one with twenty-four small
+ * bumps as a chart that has been bent into a circle.
+ */
+function dialKernel(dial: DialKind): number[][] {
+  const bins = binsOf(dial);
+  return Array.from({ length: CONTOUR_SAMPLES }, (_, sample) => {
+    const sampleFraction = sample / CONTOUR_SAMPLES;
+    return Array.from({ length: bins }, (_unused, bin) => {
+      // Hours are spans, so their weight sits mid-span; a weekday is a point.
+      const centre = dialFraction(dial, dial === "hours" ? bin + 0.5 : bin);
+      const angle = (sampleFraction - centre) * Math.PI * 2;
+      return Math.pow((1 + Math.cos(angle)) / 2, RHYTHM_SHARPNESS);
+    });
+  });
+}
+
+interface Wobble {
+  readonly start: readonly number[];
+  readonly end: readonly number[];
+  /** Draws the next ring's own small wave: two [frequency, phase] pairs. */
+  readonly drift: () => readonly (readonly [number, number])[];
+}
+
+/** Two slow wave patterns; the trunk drifts from one to the other as it ages. */
+function grainWobble(name: string): Wobble {
+  const random = mulberry32(hashString(`grain:${name}`));
+  const pattern = (): number[] => {
+    const waves = [2, 3, 4, 5, 6].map((frequency) => ({
+      frequency,
+      amplitude: (0.5 + random()) / frequency,
+      phase: random() * Math.PI * 2,
+    }));
+    const values = Array.from({ length: CONTOUR_SAMPLES }, (_, sample) => {
+      const angle = (sample / CONTOUR_SAMPLES) * Math.PI * 2;
+      return waves.reduce(
+        (sum, wave) => sum + wave.amplitude * Math.cos(angle * wave.frequency + wave.phase),
+        0,
+      );
+    });
+    const extent = Math.max(...values.map(Math.abs)) || 1;
+    return values.map((value) => value / extent);
+  };
+  const start = pattern();
+  const end = pattern();
+  return {
+    start,
+    end,
+    drift: () => [
+      [3 + Math.floor(random() * 3), random() * Math.PI * 2],
+      [6 + Math.floor(random() * 4), random() * Math.PI * 2],
+    ],
+  };
+}
+
+/**
+ * How one ring's thickness is shared out around the trunk. The mean is always
+ * exactly 1, so shape never changes how much wood a period is given.
+ */
+function growthProfile(
+  distribution: readonly number[] | null,
+  kernel: readonly (readonly number[])[],
+  wobble: Wobble,
+  progress: number,
+  leanStrength: number,
+  driftStrength: number,
+): number[] {
+  const lean = Array<number>(CONTOUR_SAMPLES).fill(0);
+
+  if (distribution) {
+    let mean = 0;
+    for (let sample = 0; sample < CONTOUR_SAMPLES; sample += 1) {
+      const row = kernel[sample]!;
+      let value = 0;
+      for (let bin = 0; bin < distribution.length; bin += 1) {
+        value += distribution[bin]! * row[bin]!;
+      }
+      lean[sample] = value;
+      mean += value;
+    }
+    mean /= CONTOUR_SAMPLES;
+    for (let sample = 0; sample < CONTOUR_SAMPLES; sample += 1) {
+      // tanh keeps a history that only ever happens at 3am from growing a horn.
+      lean[sample] = mean === 0 ? 0 : Math.tanh(1.1 * (lean[sample]! / mean - 1));
+    }
+  }
+
+  const drift = wobble.drift();
+  const growth = lean.map((value, sample) => {
     const angle = (sample / CONTOUR_SAMPLES) * Math.PI * 2;
-    return harmonics.reduce(
-      (sum, harmonic) =>
-        sum +
-        harmonic.cosine * Math.cos(angle * harmonic.frequency) +
-        harmonic.sine * Math.sin(angle * harmonic.frequency),
+    const grain = wobble.start[sample]! * (1 - progress) + wobble.end[sample]! * progress;
+    const own = drift.reduce(
+      (sum, [frequency, phase]) => sum + Math.cos(angle * frequency + phase) / 2,
       0,
     );
+    return (1 + leanStrength * value) * (1 + GRAIN_WOBBLE * grain + driftStrength * own);
   });
-  const mean = signature.reduce((sum, value) => sum + value, 0) / signature.length;
-  const centred = signature.map((value) => value - mean);
-  const extent = Math.max(...centred.map(Math.abs));
-  if (extent === 0) {
-    return Array<number>(CONTOUR_SAMPLES).fill(1);
-  }
-  return centred.map((value) => 1 + (value / extent) * TRUNK_CHARACTER);
+  const mean = growth.reduce((sum, value) => sum + value, 0) / growth.length;
+  return growth.map((value) => value / mean);
+}
+
+function wrapUnit(value: number): number {
+  return ((value % 1) + 1) % 1;
 }
 
 /**
@@ -386,6 +670,7 @@ function chooseScars(
   buckets: readonly Bucket[],
   activities: readonly ActivityRecord[],
   metric: ActivityHistory["metric"],
+  dial: DialKind,
 ): Map<number, RingScar[]> {
   const byBucket = new Map<number, RingScar[]>();
   if (metric !== "lines" || activities.length === 0) {
@@ -411,8 +696,14 @@ function chooseScars(
     }
   }
 
+  // Far beyond the ordinary, and also within sight of the largest: a trunk
+  // with one great split should not be scratched all over by lesser ones.
   const candidates = measurable
-    .filter((activity) => (activity.magnitude ?? 0) > Math.max(median * 12, 400))
+    .filter(
+      (activity) =>
+        (activity.magnitude ?? 0) > Math.max(median * 12, 400) &&
+        (activity.magnitude ?? 0) >= largest * 0.12,
+    )
     .sort((a, b) => (b.magnitude ?? 0) - (a.magnitude ?? 0))
     .slice(0, MAX_SCARS);
 
@@ -424,9 +715,17 @@ function chooseScars(
     const bucket = buckets[index]!;
     const periodFraction =
       (activity.timestampMs - bucket.startMs) / (bucket.endMs - bucket.startMs);
+    // A scar sits where its moment falls on the dial, so that it lines up with
+    // the lean around it; without a dial it falls back to when in the period.
+    const turn =
+      dial === "hours" && typeof activity.localHour === "number"
+        ? dialFraction(dial, activity.localHour)
+        : dial === "weekdays" && typeof activity.weekday === "number"
+          ? dialFraction(dial, activity.weekday + (periodFraction - 0.5) * 0.6)
+          : periodFraction;
     const scars = byBucket.get(index) ?? [];
     scars.push({
-      angle: periodFraction * Math.PI * 2 - Math.PI / 2,
+      angle: turn * Math.PI * 2 - Math.PI / 2,
       severity: clamp((activity.magnitude ?? 0) / largest, 0.2, 1),
       id: activity.detail.id,
       summary: activity.detail.summary,

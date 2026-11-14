@@ -13,7 +13,7 @@ import type {
   HistorySource,
   LoadProgress,
 } from "../../core/types";
-import { isNightAt } from "../../core/activity";
+import { isNightAt, localClock } from "../../core/activity";
 import { GitObjectStore } from "./objects";
 
 const MAX_COMMITS = 20000;
@@ -286,6 +286,7 @@ export async function loadLocalHistory(
 
 function toActivity(commit: CommitRecord): ActivityRecord {
   const groupKey = commit.authorEmail || commit.authorName || "unknown";
+  const clock = localClock(commit.timestampMs, commit.tzOffsetMinutes);
   return {
     timestampMs: commit.timestampMs,
     count: 1,
@@ -293,6 +294,8 @@ function toActivity(commit: CommitRecord): ActivityRecord {
     nightCount: isNightAt(commit.timestampMs, commit.tzOffsetMinutes) ? 1 : 0,
     groupKey,
     detail: null,
+    localHour: clock.hour,
+    weekday: clock.weekday,
   };
 }
 
