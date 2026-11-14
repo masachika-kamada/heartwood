@@ -14,6 +14,12 @@ inputs:
   name:
     description: File name stem. The files are `<name>-dark.webp` and `<name>-light.webp`.
     default: heartwood
+  readme:
+    description: Markdown file whose `<!-- heartwood:start -->` … `<!-- heartwood:end -->` section is filled in with the trunk and its hoverable core sample. Left alone if it has no such section.
+    default: README.md
+  width:
+    description: Width in pixels the README shows the trunk and the core sample at.
+    default: "600"
   token:
     description: Token used to read the history. The workflow's own token is enough for public activity.
     default: ${{ github.token }}
@@ -37,4 +43,6 @@ runs:
         HEARTWOOD_OUT: ${{ github.workspace }}/${{ inputs.output }}
         HEARTWOOD_NAME: ${{ inputs.name }}
         HEARTWOOD_TOKEN: ${{ inputs.token }}
+        HEARTWOOD_README: ${{ github.workspace }}/${{ inputs.readme }}
+        HEARTWOOD_WIDTH: ${{ inputs.width }}
       run: node "${{ github.action_path }}/scripts/render.mjs"

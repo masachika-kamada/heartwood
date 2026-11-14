@@ -10,6 +10,8 @@ import { contourRadiusAtAngle, traceLoop, type TreeLayout } from "../render/ring
 
 export interface Inspector {
   attach(tree: TreeModel, layout: TreeLayout): void;
+  /** Points at a ring as if the pointer were resting on it, until it moves. */
+  select(ring: Ring): void;
 }
 
 export function createInspector(
@@ -69,6 +71,26 @@ export function createInspector(
       layout = nextLayout;
       hide();
       highlight(overlay, null, null, null);
+    },
+    select(ring) {
+      if (!tree || !layout) {
+        return;
+      }
+      shown = ring;
+      panel.innerHTML = describe(ring, tree);
+      highlight(overlay, tree, layout, ring);
+      panel.hidden = false;
+
+      // Beside the ring where it crosses the upper right of the trunk.
+      const sample = Math.round(ring.contour.length / 8);
+      const inner = tree.rings[ring.index - 1]?.contour[sample] ?? 0;
+      const reach = ((inner + ring.contour[sample]!) / 2) * layout.scale;
+      const x = layout.originX + Math.SQRT1_2 * reach;
+      const y = layout.originY - Math.SQRT1_2 * reach;
+      const width = panel.offsetWidth;
+      const left = x + 18 + width > layout.width ? x - 18 - width : x + 18;
+      panel.style.left = `${Math.max(8, left)}px`;
+      panel.style.top = `${Math.max(8, y - panel.offsetHeight / 2)}px`;
     },
   };
 }

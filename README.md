@@ -131,11 +131,10 @@ server here.
 
 ## On a profile or project README
 
-A README cannot run a page, only show an image. So Heartwood can also be run
-as a GitHub Action that draws the trunk on a schedule and commits it as two
-small WebP images on a transparent ground, one lettered for dark pages and one
-for light.
-There is still no server: the drawing happens in your own workflow.
+A README cannot run a page. GitHub strips every script and stylesheet out of
+it, so the trunk there can only be an image. Heartwood can be run as a GitHub
+Action that draws it on a schedule and commits it to your repository. There is
+still no server: the drawing happens in your own workflow.
 
 In the repository whose README should show it — for a profile, the one named
 after your username — add `.github/workflows/heartwood.yml`:
@@ -162,18 +161,47 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add heartwood
+          git add heartwood README.md
           git diff --cached --quiet || git commit -m "Grow the trunk"
           git push
 ```
 
-Then, in the README:
+Then put two comments in the README where the trunk should go. The Action
+fills in, and keeps up to date, whatever lies between them:
+
+```html
+<!-- heartwood:start -->
+<!-- heartwood:end -->
+```
+
+### A README you can point at
+
+What the Action writes between those comments is not only a picture. Two
+things in it get a little interaction through GitHub's sanitiser, with no
+script anywhere:
+
+- **Under the trunk is its core sample** — the thin cylinder a forester bores
+  out of a tree to count its rings, pith at the left and bark at the right.
+  It is not one image but one image per ring, set side by side with nothing
+  between them, and each carries a `title`. GitHub keeps titles, and a browser
+  shows one when the pointer rests on its image. So resting on a band says
+  what that ring is: *Mar 2023 · 48 contributions · 25% at weekends*.
+  Clicking a band opens the page with that ring picked out.
+- **The trunk itself knows where it was clicked.** Its image is marked
+  `ismap`, an attribute from the 1990s that GitHub also lets through. A
+  browser that follows a link around such an image adds the position of the
+  click to the address — `…/#you@600?213,188`. The page lays the same picture
+  out again, finds the ring under that point and opens with it picked out.
+
+The titles hold dates and counts only, never the names of repositories or
+people. To show only the picture, leave the comments out and write the image
+yourself:
 
 ```html
 <a href="https://masachika-kamada.github.io/heartwood/#YOUR-NAME">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="heartwood/heartwood-dark.webp">
-    <img src="heartwood/heartwood-light.webp" alt="My commit history as growth rings" width="420">
+    <img src="heartwood/heartwood-light.webp" alt="My commit history as growth rings" width="600">
   </picture>
 </a>
 ```

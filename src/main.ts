@@ -7,8 +7,15 @@ import { loadGitHubHistory, parseGitHubInput, type GitHubInput } from "./sources
 import { loadGitHubUserHistory } from "./sources/github-user";
 import { loadLocalHistory } from "./sources/git/local";
 import { createTreePainter, type TreePainter } from "./render/rings";
-import { exportTreePng, treeImageDataUrl } from "./render/export";
-import { createInspector } from "./ui/inspector";
+import {
+  exportTreePng,
+  README_IMAGE,
+  readmeImageLayout,
+  treeImageDataUrl,
+} from "./render/export";
+import { renderCore } from "./render/core";
+import { createInspector, ringAtPoint } from "./ui/inspector";
+import { parseTreeLink, type TreeLink } from "./ui/link";
 import { INPUT_EXAMPLES } from "./ui/examples";
 import { readingFor } from "./ui/reading";
 import { clearToken, hasToken, maskToken, readToken, saveToken } from "./sources/github-auth";
@@ -148,6 +155,8 @@ let painter: TreePainter | null = null;
 let inFlight: AbortController | null = null;
 let animationHandle = 0;
 let resizeHandle = 0;
+/** A ring the address asked to be pointed at, once its tree has grown. */
+let pendingLink: TreeLink | null = null;
 
 /* ------------------------------------------------------------------ *
  * Presentation
@@ -180,6 +189,7 @@ function animateGrowth(): void {
   }
   if (reducedMotion.matches) {
     painter.paint(1);
+    pointAtLinkedRing();
     return;
   }
 
@@ -191,9 +201,40 @@ function animateGrowth(): void {
     painter?.paint(1 - Math.pow(1 - t, 2.6));
     if (t < 1) {
       animationHandle = requestAnimationFrame(step);
+    } else {
+      pointAtLinkedRing();
     }
   };
   animationHandle = requestAnimationFrame(step);
+}
+
+/**
+ * Someone arrived by clicking a ring somewhere else — a band of the core
+ * sample in a README, or a spot on the README's picture of the trunk. Show
+ * them the ring they clicked.
+ */
+function pointAtLinkedRing(): void {
+  const link = pendingLink;
+  pendingLink = null;
+  if (!link || !currentTree || currentTree.rings.length === 0) {
+    return;
+  }
+  let ring = link.ring === null ? null : (currentTree.rings[link.ring] ?? null);
+  if (!ring && link.point) {
+    // The click is in the pixels the picture was shown at; the layout is in
+    // the pixels it was drawn at.
+    const factor = README_IMAGE.width / link.point.shownWidth;
+    ring = ringAtPoint(
+      currentTree,
+      readmeImageLayout(currentTree),
+      link.point.x * factor,
+      link.point.y * factor,
+    );
+  }
+  if (ring) {
+    inspector.select(ring);
+    canvas.scrollIntoView({ block: "center", behavior: reducedMotion.matches ? "auto" : "smooth" });
+  }
 }
 
 function show(history: ActivityHistory): void {
@@ -396,16 +437,21 @@ function setLink(name: string | null): void {
   }
 }
 
-function linkedName(): string | null {
-  const name = decodeURIComponent(window.location.hash.replace(/^#\/?/, "")).trim();
-  return name !== "" && parseGitHubInput(name) ? name : null;
+function linkedTree(): TreeLink | null {
+  const link = parseTreeLink(window.location.hash);
+  return link && parseGitHubInput(link.name) ? link : null;
 }
 
 window.addEventListener("hashchange", () => {
-  const name = linkedName();
-  if (name && name.toLowerCase() !== repoInput.value.trim().toLowerCase()) {
-    repoInput.value = name;
-    void growFromGitHub(name);
+  const link = linkedTree();
+  if (!link) {
+    return;
+  }
+  const wantsRing = link.ring !== null || link.point !== null;
+  if (wantsRing || link.name.toLowerCase() !== repoInput.value.trim().toLowerCase()) {
+    pendingLink = link;
+    repoInput.value = link.name;
+    void growFromGitHub(link.name);
   }
 });
 
@@ -522,13 +568,16 @@ window.heartwood = {
         ? "error"
         : "ready",
   message: () => statusEl.textContent ?? "",
-  image: (options) => (currentTree ? treeImageDataUrl(currentTree, options) : null),
+  image: (options) =>
+    currentTree ? treeImageDataUrl(currentTree, { ...README_IMAGE, ...options }) : null,
+  core: (options) => (currentTree ? renderCore(currentTree, options) : null),
 };
 
-const linked = linkedName();
+const linked = linkedTree();
 if (linked) {
-  repoInput.value = linked;
-  void growFromGitHub(linked);
+  pendingLink = linked;
+  repoInput.value = linked.name;
+  void growFromGitHub(linked.name);
 } else {
   show(createDemoHistory());
   setStatus("A made-up project, so the page is not empty. Grow one of your own.");

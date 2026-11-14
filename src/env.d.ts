@@ -24,5 +24,9 @@ interface Window {
       width?: number;
       textScale?: number;
     }): string | null;
+    core(options?: { width?: number; height?: number; pixelRatio?: number }): {
+      height: number;
+      slices: { ringIndex: number; width: number; title: string; dataUrl: string }[];
+    } | null;
   };
 }

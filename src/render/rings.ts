@@ -1122,6 +1122,22 @@ export function contourRadiusAtAngle(
   return contour[lower]! + (contour[upper]! - contour[lower]!) * fraction;
 }
 
+/**
+ * The colour of the wood at any depth of any ring, for a drawing that shows
+ * the same rings some other way than round. `position` runs from 0 at a
+ * ring's inner edge to 1 at its outer one.
+ */
+export function woodColours(tree: TreeModel): (ringIndex: number, position: number) => string {
+  const timbers = assignTimbers(tree);
+  const tones = tree.rings.map((ring) =>
+    toneOf(ring, timbers.get(ring.dominantGroup ?? "") ?? TIMBERS[0]!),
+  );
+  return (ringIndex, position) => {
+    const tone = tones[ringIndex]!;
+    return hsl(mixHsl(tone.early, tone.late, densityAt(position, tone.lateShare)));
+  };
+}
+
 function assignTimbers(tree: TreeModel): Map<string, Hsl> {
   const timbers = new Map<string, Hsl>();
   for (const [index, group] of tree.groups.entries()) {

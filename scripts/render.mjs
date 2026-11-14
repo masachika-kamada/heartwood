@@ -15,11 +15,21 @@
  *   HEARTWOOD_TOKEN   optional GitHub token; a person's full history needs one
  *   HEARTWOOD_NAME    file name stem, default "heartwood"
  *   HEARTWOOD_CHROME  path to a Chrome/Chromium binary, default: installed Chrome
+ *   HEARTWOOD_README  a Markdown file to keep up to date: whatever lies between
+ *                     <!-- heartwood:start --> and <!-- heartwood:end --> in it
+ *                     is replaced with the trunk and its core sample
+ *   HEARTWOOD_WIDTH   width the README shows them at, default 600
+ *   HEARTWOOD_SITE    the page the README links to, default the public one
+ *
+ * Besides the two pictures it writes `core/NNN.webp`: the trunk as a core
+ * sample, cut into one image per ring. A README cannot run a script, but it
+ * keeps an image's `title`, so each ring's image carries what that ring would
+ * say on the page and the browser shows it when the pointer rests there.
  */
 
 import { createServer } from "node:http";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { extname, join, normalize, resolve } from "node:path";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { dirname, extname, join, normalize, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 
@@ -27,6 +37,14 @@ const target = process.argv[2] ?? process.env.HEARTWOOD_TARGET;
 const outDir = resolve(process.argv[3] ?? process.env.HEARTWOOD_OUT ?? "heartwood");
 const stem = process.env.HEARTWOOD_NAME || "heartwood";
 const token = process.env.HEARTWOOD_TOKEN || "";
+const readme = process.env.HEARTWOOD_README ? resolve(process.env.HEARTWOOD_README) : null;
+const shownWidth = Number(process.env.HEARTWOOD_WIDTH) || 600;
+const site = (process.env.HEARTWOOD_SITE || "https://masachika-kamada.github.io/heartwood/").replace(
+  /\/?$/,
+  "/",
+);
+const START = "<!-- heartwood:start -->";
+const END = "<!-- heartwood:end -->";
 const dist = fileURLToPath(new URL("../dist/", import.meta.url));
 
 if (!target) {
@@ -119,6 +137,37 @@ try {
     await writeFile(file, Buffer.from(dataUrl.split(",")[1], "base64"));
     console.log(`wrote ${file}`);
   }
+
+  const core = await page.evaluate(
+    (width) => window.heartwood.core({ width, height: Math.round(width * 0.09) }),
+    shownWidth,
+  );
+  if (!core || core.slices.length === 0) {
+    throw new Error("The page drew no core sample.");
+  }
+  const coreDir = join(outDir, "core");
+  await rm(coreDir, { recursive: true, force: true });
+  await mkdir(coreDir, { recursive: true });
+  const files = [];
+  for (const [index, slice] of core.slices.entries()) {
+    const file = `${String(index).padStart(3, "0")}.webp`;
+    await writeFile(join(coreDir, file), Buffer.from(slice.dataUrl.split(",")[1], "base64"));
+    files.push(file);
+  }
+  console.log(`wrote ${core.slices.length} bands to ${coreDir}`);
+
+  if (readme) {
+    const text = await readFile(readme, "utf8").catch(() => "");
+    const from = text.indexOf(START);
+    const to = text.indexOf(END);
+    if (from === -1 || to < from) {
+      console.log(`note: ${readme} has no ${START} … ${END} to fill in.`);
+    } else {
+      const block = readmeBlock(core, files, relative(dirname(readme), outDir).split(sep).join("/"));
+      await writeFile(readme, `${text.slice(0, from + START.length)}\n${block}\n${text.slice(to)}`);
+      console.log(`updated ${readme}`);
+    }
+  }
   if (message) {
     console.log(`note: ${message}`);
   }
@@ -127,6 +176,47 @@ try {
 } finally {
   await browser?.close();
   server.close();
+}
+
+/**
+ * What goes into the README. Two things in it are doing unusual work:
+ *
+ * - the trunk's image is marked `ismap`, so a click on it opens the page with
+ *   the position of the click on the end of the address, and the page works
+ *   out which ring that was;
+ * - the bands of the core sample are separate images with no space between
+ *   them, each with a `title` the browser shows on hover and a link to its
+ *   own ring.
+ */
+function readmeBlock(core, files, dir) {
+  const escape = (value) =>
+    String(value).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+  const where = `${site}#${encodeURIComponent(target).replace(/%2F/gi, "/")}`;
+  const bands = core.slices
+    .map((slice, index) => {
+      const href = slice.ringIndex < 0 ? where : `${where}?ring=${slice.ringIndex}`;
+      const title = escape(slice.title);
+      return (
+        `<a href="${href}" title="${title}">` +
+        `<img src="${dir}/core/${files[index]}" width="${slice.width}" height="${core.height}" alt="" title="${title}">` +
+        `</a>`
+      );
+    })
+    .join("");
+  return [
+    `<p align="center">`,
+    `  <a href="${where}@${shownWidth}">`,
+    `    <picture>`,
+    `      <source media="(prefers-color-scheme: dark)" srcset="${dir}/${stem}-dark.webp">`,
+    `      <img src="${dir}/${stem}-light.webp" alt="${escape(target)}'s history on GitHub drawn as the growth rings of a tree trunk" width="${shownWidth}" ismap>`,
+    `    </picture>`,
+    `  </a>`,
+    `  <br>`,
+    `  ${bands}`,
+    `  <br>`,
+    `  <sub>Rest the pointer on a band to read that ring. Click a band, or anywhere on the trunk, to open that ring.</sub>`,
+    `</p>`,
+  ].join("\n");
 }
 
 if (failure) {
