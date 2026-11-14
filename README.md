@@ -2,6 +2,15 @@
 
 Draws software activity as the growth rings of a cross-cut trunk.
 
+**Try it: <https://masachika-kamada.github.io/heartwood/>** — nothing to
+install, no account. Add `#owner/repository` or `#username` to the address to
+open straight onto a tree, e.g.
+<https://masachika-kamada.github.io/heartwood/#masachika-kamada/heartwood>.
+
+<p align="center">
+  <img src="docs/heartwood.jpg" alt="A trunk cross-section drawn from a commit history: rings, a crack, pale sapwood at the edge, and a 24-hour dial around the bark" width="520">
+</p>
+
 The picture is the product, not a reconstructed commit database. Each source
 provides the smallest honest measurements it has — commit counts, dates,
 authors or repositories, and changed lines only when they are actually known.
