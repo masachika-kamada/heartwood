@@ -3,15 +3,21 @@ import { buildTree } from "./core/tree";
 import type { ActivityHistory, LoadProgress, TreeModel } from "./core/types";
 import { activityNoun } from "./core/activity";
 import { createDemoHistory } from "./sources/demo";
-import { loadGitHubHistory, parseGitHubInput } from "./sources/github";
+import { loadGitHubHistory, parseGitHubInput, type GitHubInput } from "./sources/github";
 import { loadGitHubUserHistory } from "./sources/github-user";
 import { loadLocalHistory } from "./sources/git/local";
-import { renderTree } from "./render/rings";
+import { createTreePainter, type TreePainter } from "./render/rings";
 import { exportTreePng } from "./render/export";
 import { createInspector } from "./ui/inspector";
 import { INPUT_EXAMPLES } from "./ui/examples";
-import { clearToken, maskToken, readToken, saveToken } from "./sources/github-auth";
+import { readingFor } from "./ui/reading";
+import { clearToken, hasToken, maskToken, readToken, saveToken } from "./sources/github-auth";
 import { resetBudgets } from "./sources/github-http";
+import {
+  clearCachedHistories,
+  readCachedHistory,
+  writeCachedHistory,
+} from "./sources/cache";
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) {
@@ -21,74 +27,77 @@ if (!app) {
 app.innerHTML = `
   <div class="page">
     <header class="masthead">
-      <h1>Heartwood</h1>
-      <p class="tagline">Every repository has a cross-section. This one is yours.</p>
+      <h1 class="wordmark">Heartwood</h1>
+      <p class="tagline">Every history has a cross-section. Cut one open.</p>
     </header>
 
+    <form class="grow" id="github-form">
+      <div class="grow__field">
+        <input
+          id="repo-input"
+          class="grow__input"
+          type="text"
+          placeholder="owner/repository, or a GitHub username"
+          autocomplete="off"
+          autocapitalize="off"
+          spellcheck="false"
+          aria-label="A GitHub repository or username"
+        />
+        <button class="button button--primary" type="submit">Grow</button>
+      </div>
+      <p class="grow__aside">
+        <span class="grow__label">Try</span>
+        ${INPUT_EXAMPLES.map(
+          (example) =>
+            `<button class="chip" type="button" data-example="${example.value}">${example.value}</button>`,
+        ).join("")}
+        <span class="grow__label grow__label--or">or</span>
+        <button id="pick-folder" class="chip chip--solid" type="button">
+          open a folder on this computer
+        </button>
+      </p>
+      <p class="grow__note" id="local-note">
+        A repository draws one project; a username draws a person's work across all of
+        theirs. A folder is read in your browser and never uploaded.
+      </p>
+    </form>
+
     <section class="stage">
-      <canvas id="tree" aria-label="Growth rings drawn from a repository's history" role="img"></canvas>
-      <div class="stage__status" id="status" role="status" aria-live="polite"></div>
-      <aside class="inspector" id="inspector" hidden></aside>
+      <div class="stage__frame">
+        <canvas id="tree" aria-label="Growth rings drawn from a history of commits" role="img"></canvas>
+        <canvas id="overlay" class="stage__overlay" aria-hidden="true"></canvas>
+        <aside class="inspector" id="inspector" hidden></aside>
+      </div>
+      <p class="stage__status" role="status" aria-live="polite">
+        <span id="status"></span>
+        <button id="refresh" class="link" type="button" hidden>Read it again from GitHub</button>
+      </p>
+      <div class="stage__actions" id="actions" hidden>
+        <button id="save-png" class="button" type="button">Save as PNG</button>
+        <button id="copy-link" class="button" type="button" hidden>Copy link</button>
+      </div>
     </section>
 
-    <section class="controls">
-      <div class="control control--primary">
-        <button id="pick-folder" class="button button--primary" type="button">
-          Open a folder on this computer
-        </button>
-        <p class="control__note" id="local-note">
-          Read directly in your browser. Nothing is uploaded, not even the repository name.
-        </p>
-      </div>
-
-      <form class="control" id="github-form">
-        <label class="control__label" for="repo-input">…or a GitHub repository, or a person</label>
-        <div class="control__row">
-          <input
-            id="repo-input"
-            class="input"
-            type="text"
-            placeholder="owner/repository, or a username"
-            autocomplete="off"
-            spellcheck="false"
-          />
-          <button class="button" type="submit">Grow</button>
-        </div>
-        <p class="control__note">
-          Two things fit in that one field. <strong>owner/repository</strong> draws a single
-          project. <strong>A username on its own</strong> draws that person's GitHub commit
-          activity across repositories as one continuous trunk.
-        </p>
-        <p class="control__examples">
-          <span class="control__examples-label">Try</span>
-          ${INPUT_EXAMPLES.map(
-            (example) =>
-              `<button class="chip" type="button" data-example="${example.value}">${example.value}</button>`,
-          ).join("")}
-        </p>
-        <p class="control__note control__note--fine">
-          Without a token, a username samples up to 500 public commits across the account's
-          lifetime. With a token, GitHub's yearly contribution data supplies
-          the longer history in a handful of requests.
-        </p>
-      </form>
+    <section class="reading" id="reading" hidden>
+      <h2>Reading the rings</h2>
+      <ul class="reading__list" id="reading-list"></ul>
     </section>
 
     <details class="token" id="token-drawer">
       <summary class="token__summary">
-        <span id="token-summary-text">Want the full person history? Add a GitHub token</span>
+        <span id="token-summary-text">Add a GitHub token for a person's full history</span>
       </summary>
       <div class="token__body">
         <p class="token__note">
-          Anonymous searching gets ten requests a minute, shared by everyone on your
-          address; a token gets thirty, and lifts ordinary requests from sixty an hour to
-          five thousand. For a person, it also switches from a short search preview to
-          GitHub's compact yearly commit-contribution data.
+          Nothing here needs an account. Without a token a repository is still drawn whole,
+          and a person is drawn from a sample of their public commits. With one, a person's
+          trunk comes from GitHub's own contribution calendar instead, every year of it, and
+          the hourly budget rises from sixty requests to five thousand.
         </p>
-        <div class="control__row">
+        <div class="token__row">
           <input
             id="token-input"
-            class="input"
+            class="grow__input"
             type="password"
             placeholder="ghp_… or github_pat_…"
             autocomplete="off"
@@ -99,59 +108,46 @@ app.innerHTML = `
           <button id="token-clear" class="button" type="button" hidden>Forget</button>
         </div>
         <p class="token__note token__note--fine">
-          Kept in this browser's local storage and sent only to api.github.com. There is no
+          Kept in this browser's local storage and sent only to api.github.com; there is no
           server here to send it anywhere else. Public-only access is enough for public
-          history; grant repository read access only if you want private work counted.
+          history. Grant repository read access only if you want private work counted.
           <a href="https://github.com/settings/personal-access-tokens" target="_blank" rel="noreferrer noopener">Make one</a>.
         </p>
         <p class="token__state" id="token-state" role="status"></p>
       </div>
     </details>
 
-    <section class="legend" id="legend" hidden>
-      <h2>How to read it</h2>
-      <ul>
-        <li id="legend-volume"><span class="swatch swatch--thick"></span> <span id="legend-volume-text"></span></li>
-        <li><span class="swatch swatch--hue"></span> Uneven growth shows when activity clustered within each period, from its start at the top clockwise.</li>
-        <li id="legend-night"><span class="swatch swatch--dark"></span> Darker wood is work done between 22:00 and 05:00, in the author's own timezone.</li>
-        <li><span class="swatch swatch--pinched"></span> <span id="legend-dormant-text"></span></li>
-        <li id="legend-scar"><span class="swatch swatch--scar"></span> A scar is a single change far larger than everything around it.</li>
-        <li id="legend-group"><span class="swatch swatch--hue"></span> <span id="hue-note"></span></li>
-      </ul>
-      <div class="legend__actions">
-        <button id="save-png" class="button" type="button">Save as PNG</button>
-      </div>
-    </section>
-
     <footer class="colophon">
-      <p>Reads <code>.git</code> in the browser. No server, no account, no upload.</p>
+      <p>No server, no account, no upload. Drawn in your browser from <code>.git</code> or the GitHub API.</p>
     </footer>
   </div>
 `;
 
 const canvas = document.querySelector<HTMLCanvasElement>("#tree")!;
-const statusEl = document.querySelector<HTMLDivElement>("#status")!;
-const legend = document.querySelector<HTMLElement>("#legend")!;
+const overlay = document.querySelector<HTMLCanvasElement>("#overlay")!;
+const statusEl = document.querySelector<HTMLSpanElement>("#status")!;
+const refreshButton = document.querySelector<HTMLButtonElement>("#refresh")!;
+const actions = document.querySelector<HTMLDivElement>("#actions")!;
+const reading = document.querySelector<HTMLElement>("#reading")!;
+const readingList = document.querySelector<HTMLUListElement>("#reading-list")!;
 const pickButton = document.querySelector<HTMLButtonElement>("#pick-folder")!;
 const localNote = document.querySelector<HTMLParagraphElement>("#local-note")!;
 const githubForm = document.querySelector<HTMLFormElement>("#github-form")!;
 const repoInput = document.querySelector<HTMLInputElement>("#repo-input")!;
 const savePngButton = document.querySelector<HTMLButtonElement>("#save-png")!;
-const hueNote = document.querySelector<HTMLSpanElement>("#hue-note")!;
-const legendVolumeText = document.querySelector<HTMLSpanElement>("#legend-volume-text")!;
-const legendDormantText = document.querySelector<HTMLSpanElement>("#legend-dormant-text")!;
-const legendNight = document.querySelector<HTMLLIElement>("#legend-night")!;
-const legendScar = document.querySelector<HTMLLIElement>("#legend-scar")!;
-const legendGroup = document.querySelector<HTMLLIElement>("#legend-group")!;
+const copyLinkButton = document.querySelector<HTMLButtonElement>("#copy-link")!;
 
 const inspector = createInspector(
   document.querySelector<HTMLElement>("#inspector")!,
   canvas,
+  overlay,
 );
 
 let currentTree: TreeModel | null = null;
+let painter: TreePainter | null = null;
 let inFlight: AbortController | null = null;
 let animationHandle = 0;
+let resizeHandle = 0;
 
 /* ------------------------------------------------------------------ *
  * Presentation
@@ -160,69 +156,83 @@ let animationHandle = 0;
 function setStatus(message: string, tone: "idle" | "busy" | "error" = "idle"): void {
   statusEl.textContent = message;
   statusEl.dataset.tone = tone;
-  statusEl.hidden = message === "";
+  if (tone !== "idle") {
+    refreshButton.hidden = true;
+  }
 }
 
-function draw(reveal = 1): void {
+/** Repaints the trunk bitmap for the canvas's current size. */
+function prepare(): void {
   if (!currentTree) {
     return;
   }
-  renderTree(canvas, currentTree, { reveal });
+  painter = createTreePainter(canvas, currentTree);
+  inspector.attach(currentTree, painter.layout);
 }
+
+const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
 /** Grows the trunk outward once, so the picture arrives rather than appears. */
 function animateGrowth(): void {
   cancelAnimationFrame(animationHandle);
-  const startedAt = performance.now();
-  const durationMs = 900;
+  if (!painter) {
+    return;
+  }
+  if (reducedMotion.matches) {
+    painter.paint(1);
+    return;
+  }
 
+  const startedAt = performance.now();
+  const durationMs = 1500;
   const step = (now: number): void => {
     const t = Math.min(1, (now - startedAt) / durationMs);
     // Ease out: fast at the pith, settling as it reaches the bark.
-    draw(1 - Math.pow(1 - t, 3));
+    painter?.paint(1 - Math.pow(1 - t, 2.6));
     if (t < 1) {
       animationHandle = requestAnimationFrame(step);
     }
   };
-
   animationHandle = requestAnimationFrame(step);
 }
 
 function show(history: ActivityHistory): void {
   currentTree = buildTree(history);
-  inspector.attach(currentTree);
-  legend.hidden = false;
-  paintLegend(currentTree);
+  prepare();
+  paintReading(currentTree);
+  actions.hidden = currentTree.rings.length === 0;
 
   if (currentTree.rings.length === 0) {
     setStatus(`There are no ${activityNoun(currentTree.metric)} to draw.`, "error");
-    draw();
+    painter?.paint(1);
     return;
   }
 
-  const truncatedNote = currentTree.truncated ? " This is a partial history." : "";
-  setStatus(
-    `${currentTree.name} · ${currentTree.totalActivities.toLocaleString("en")} ${activityNoun(currentTree.metric, currentTree.totalActivities)}.${truncatedNote}`,
-  );
+  const notes: string[] = [];
+  if (currentTree.estimated) {
+    notes.push("Sampled from public commits; stretches between samples are averaged.");
+  } else if (currentTree.truncated) {
+    notes.push("This is a partial history.");
+  }
+  setStatus(notes.join(" "));
   animateGrowth();
 }
 
-function paintLegend(tree: TreeModel): void {
-  legendVolumeText.textContent =
-    tree.metric === "lines"
-      ? "A wide ring is a period when a lot of code changed."
-      : `A wide ring is a period with many ${activityNoun(tree.metric)}.`;
-  legendDormantText.textContent =
-    `A thin pale ring is a period with no ${activityNoun(tree.metric)}.`;
-  legendNight.hidden = !tree.hasNightData;
-  legendScar.hidden = !tree.hasOutlierData;
-  legendGroup.hidden = tree.groupKind === "none";
-  hueNote.textContent =
-    tree.groupKind === "repositories"
-      ? "Hue follows whichever repository took most of that period."
-      : tree.groupKind === "authors"
-        ? "Hue follows whoever committed most in that period."
-        : "";
+function paintReading(tree: TreeModel): void {
+  const items = readingFor(tree);
+  reading.hidden = items.length === 0;
+  readingList.innerHTML = items
+    .map(
+      (item) => `
+        <li class="reading__item">
+          <span class="swatch swatch--${item.kind}" aria-hidden="true"></span>
+          <div>
+            <h3>${item.title}</h3>
+            <p>${item.text}</p>
+          </div>
+        </li>`,
+    )
+    .join("");
 }
 
 /* ------------------------------------------------------------------ *
@@ -243,12 +253,25 @@ function reportFailure(error: unknown): void {
   setStatus(message, "error");
 }
 
+function progressText(phase: string, done: number, total: number | null): string {
+  if (total === null && done === 0) {
+    return `${phase}…`;
+  }
+  const count =
+    total === null
+      ? done.toLocaleString("en")
+      : `${done.toLocaleString("en")} / ${total.toLocaleString("en")}`;
+  return `${phase}… ${count}`;
+}
+
 const supportsDirectoryPicker = typeof window.showDirectoryPicker === "function";
 
 if (!supportsDirectoryPicker) {
   pickButton.disabled = true;
+  pickButton.title = "Opening a folder needs Chrome, Edge or another Chromium browser.";
   localNote.textContent =
-    "Your browser cannot open folders directly. Chrome or Edge can; meanwhile, try a public repository below.";
+    "A repository draws one project; a username draws a person's work across all of theirs. " +
+    "This browser cannot open folders directly — Chrome and Edge can.";
 }
 
 pickButton.addEventListener("click", async () => {
@@ -278,6 +301,7 @@ pickButton.addEventListener("click", async () => {
       (phase, done, total) => setStatus(progressText(phase, done, total), "busy"),
       signal,
     );
+    setLink(null);
     show(history);
   } catch (error) {
     reportFailure(error);
@@ -286,10 +310,17 @@ pickButton.addEventListener("click", async () => {
   }
 });
 
-githubForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
+function canonical(input: GitHubInput): string {
+  return input.kind === "user" ? input.login : `${input.target.owner}/${input.target.repo}`;
+}
 
-  const parsed = parseGitHubInput(repoInput.value);
+/** Signed and anonymous reads see different things, so they are cached apart. */
+function cacheKey(input: GitHubInput): string {
+  return `${input.kind}:${canonical(input).toLowerCase()}:${hasToken() ? "signed" : "anonymous"}`;
+}
+
+async function growFromGitHub(raw: string, fresh = false): Promise<void> {
+  const parsed = parseGitHubInput(raw);
   if (!parsed) {
     setStatus("Try owner/repository, or a GitHub username.", "error");
     repoInput.focus();
@@ -297,7 +328,19 @@ githubForm.addEventListener("submit", async (event) => {
   }
 
   const signal = beginLoad();
-  setStatus(parsed.kind === "user" ? "Looking for commits…" : "Fetching commits…", "busy");
+  const key = cacheKey(parsed);
+  const cached = fresh ? null : readCachedHistory(key);
+  if (cached) {
+    setLink(canonical(parsed));
+    show(cached.history);
+    const minutes = Math.round((Date.now() - cached.savedAtMs) / 60_000);
+    const age = minutes < 1 ? "a moment ago" : minutes < 90 ? `${minutes} min ago` : `${Math.round(minutes / 60)} h ago`;
+    setStatus(`${statusEl.textContent} Read ${age}.`.trim());
+    refreshButton.hidden = false;
+    return;
+  }
+
+  setStatus(parsed.kind === "user" ? "Looking for commits…" : "Reading the repository…", "busy");
 
   try {
     const report: LoadProgress = (phase, done, total) =>
@@ -308,10 +351,21 @@ githubForm.addEventListener("submit", async (event) => {
         ? await loadGitHubUserHistory(parsed.login, report, signal)
         : await loadGitHubHistory(parsed.target, report, signal);
 
+    writeCachedHistory(key, history);
+    setLink(canonical(parsed));
     show(history);
   } catch (error) {
     reportFailure(error);
   }
+}
+
+githubForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  void growFromGitHub(repoInput.value);
+});
+
+refreshButton.addEventListener("click", () => {
+  void growFromGitHub(repoInput.value, true);
 });
 
 /**
@@ -325,6 +379,47 @@ for (const chip of document.querySelectorAll<HTMLButtonElement>("[data-example]"
     githubForm.requestSubmit();
   });
 }
+
+/* ------------------------------------------------------------------ *
+ * A tree has an address
+ * ------------------------------------------------------------------ */
+
+/** The address bar names the tree on screen, so a link draws the same one. */
+function setLink(name: string | null): void {
+  const next = name ? `#${name}` : "";
+  if (window.location.hash !== next) {
+    window.history.replaceState(null, "", next || window.location.pathname + window.location.search);
+  }
+  copyLinkButton.hidden = name === null;
+  if (name !== null) {
+    repoInput.value = name;
+  }
+}
+
+function linkedName(): string | null {
+  const name = decodeURIComponent(window.location.hash.replace(/^#\/?/, "")).trim();
+  return name !== "" && parseGitHubInput(name) ? name : null;
+}
+
+window.addEventListener("hashchange", () => {
+  const name = linkedName();
+  if (name && name.toLowerCase() !== repoInput.value.trim().toLowerCase()) {
+    repoInput.value = name;
+    void growFromGitHub(name);
+  }
+});
+
+copyLinkButton.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(window.location.href);
+    copyLinkButton.textContent = "Copied";
+  } catch {
+    copyLinkButton.textContent = "Copy it from the address bar";
+  }
+  setTimeout(() => {
+    copyLinkButton.textContent = "Copy link";
+  }, 1800);
+});
 
 /* ------------------------------------------------------------------ *
  * The optional token
@@ -341,7 +436,7 @@ function paintTokenState(message = ""): void {
   tokenClear.hidden = token === null;
   tokenSummaryText.textContent = token
     ? `GitHub token saved · ${maskToken(token)}`
-    : "Want the full person history? Add a GitHub token";
+    : "Add a GitHub token for a person's full history";
   tokenState.textContent = message;
   tokenInput.value = "";
   tokenInput.placeholder = token ? "Replace the saved token" : "ghp_… or github_pat_…";
@@ -379,6 +474,8 @@ tokenClear.addEventListener("click", () => {
   }
 
   resetBudgets();
+  // What the token could see should not outlive the token.
+  clearCachedHistories();
   paintTokenState("Forgotten. Back to anonymous requests.");
 });
 
@@ -403,15 +500,20 @@ savePngButton.addEventListener("click", async () => {
   }
 });
 
-window.addEventListener("resize", () => draw());
+window.addEventListener("resize", () => {
+  cancelAnimationFrame(resizeHandle);
+  resizeHandle = requestAnimationFrame(() => {
+    cancelAnimationFrame(animationHandle);
+    prepare();
+    painter?.paint(1);
+  });
+});
 
-show(createDemoHistory());
-setStatus("A made-up project, so the page is not empty. Open one of your own.");
-
-function progressText(phase: string, done: number, total: number | null): string {
-  const count =
-    total === null
-      ? done.toLocaleString("en")
-      : `${done.toLocaleString("en")} / ${total.toLocaleString("en")}`;
-  return `${phase}… ${count}`;
+const linked = linkedName();
+if (linked) {
+  repoInput.value = linked;
+  void growFromGitHub(linked);
+} else {
+  show(createDemoHistory());
+  setStatus("A made-up project, so the page is not empty. Grow one of your own.");
 }

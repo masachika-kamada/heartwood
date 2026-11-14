@@ -18,7 +18,7 @@ export async function exportTreePng(
   canvas.height = EXPORT_HEIGHT;
   // renderTree measures with clientWidth, which is 0 for a detached canvas, so
   // the intrinsic size is what it falls back to. Keep pixelRatio at 1 here.
-  renderTree(canvas, tree, { ...options, pixelRatio: 1, showCaption: true, reveal: 1 });
+  renderTree(canvas, tree, { ...options, pixelRatio: 1, showCaption: true, annotate: true, reveal: 1 });
 
   const blob = await new Promise<Blob | null>((resolve) => {
     canvas.toBlob(resolve, "image/png");
