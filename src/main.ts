@@ -8,7 +8,6 @@ import { loadGitHubUserHistory } from "./sources/github-user";
 import { loadLocalHistory } from "./sources/git/local";
 import { createTreePainter, type TreePainter } from "./render/rings";
 import { exportTreePng, treeImageDataUrl } from "./render/export";
-import { treeGeoJson } from "./render/geojson";
 import { createInspector } from "./ui/inspector";
 import { INPUT_EXAMPLES } from "./ui/examples";
 import { readingFor } from "./ui/reading";
@@ -524,7 +523,6 @@ window.heartwood = {
         : "ready",
   message: () => statusEl.textContent ?? "",
   image: (options) => (currentTree ? treeImageDataUrl(currentTree, options) : null),
-  geojson: () => (currentTree ? JSON.stringify(treeGeoJson(currentTree)) : null),
 };
 
 const linked = linkedName();

@@ -119,13 +119,6 @@ try {
     await writeFile(file, Buffer.from(dataUrl.split(",")[1], "base64"));
     console.log(`wrote ${file}`);
   }
-  // The same trunk as a map GitHub will draw, and let a visitor click through.
-  const geojson = await page.evaluate(() => window.heartwood.geojson());
-  if (geojson) {
-    const file = join(outDir, `${stem}.geojson`);
-    await writeFile(file, `${geojson}\n`);
-    console.log(`wrote ${file}`);
-  }
   if (message) {
     console.log(`note: ${message}`);
   }

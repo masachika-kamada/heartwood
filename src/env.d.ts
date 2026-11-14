@@ -24,6 +24,5 @@ interface Window {
       width?: number;
       textScale?: number;
     }): string | null;
-    geojson(): string | null;
   };
 }

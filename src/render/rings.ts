@@ -1122,36 +1122,6 @@ export function contourRadiusAtAngle(
   return contour[lower]! + (contour[upper]! - contour[lower]!) * fraction;
 }
 
-/**
- * One flat colour per ring, as `#rrggbb`: what the ring looks like from far
- * enough away that its own gradient blurs. For renderers that can only fill.
- */
-export function ringColours(tree: TreeModel): string[] {
-  const timbers = assignTimbers(tree);
-  return tree.rings.map((ring) => {
-    const tone = toneOf(ring, timbers.get(ring.dominantGroup ?? "") ?? TIMBERS[0]!);
-    let density = 0;
-    for (let step = 0; step < 8; step += 1) {
-      density += densityAt((step + 0.5) / 8, tone.lateShare) / 8;
-    }
-    return hslToHex(mixHsl(tone.early, tone.late, density));
-  });
-}
-
-function hslToHex(colour: Hsl): string {
-  const s = clamp(colour.s, 0, 100) / 100;
-  const l = clamp(colour.l, 0, 100) / 100;
-  const a = s * Math.min(l, 1 - l);
-  const channel = (n: number): string => {
-    const k = (n + colour.h / 30) % 12;
-    const value = l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
-    return Math.round(value * 255)
-      .toString(16)
-      .padStart(2, "0");
-  };
-  return `#${channel(0)}${channel(8)}${channel(4)}`;
-}
-
 function assignTimbers(tree: TreeModel): Map<string, Hsl> {
   const timbers = new Map<string, Hsl>();
   for (const [index, group] of tree.groups.entries()) {
