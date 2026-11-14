@@ -11,27 +11,55 @@ Missing measurements are omitted rather than replaced with invented values.
 
 - **A folder on this computer** — reads `.git` in the browser. Nothing leaves the
   machine.
-- **`owner/repository`** — one public repository, through the GitHub API.
-- **A username without a token** — a fast sample of up to 500 public commits,
-  spread across the account's lifetime.
-- **A username with a token** — GitHub's yearly commit-contribution data,
-  grouped by date and repository, as one continuous trunk.
+- **`owner/repository`** — one repository, whole. GitHub has already counted
+  every week of it, so the trunk arrives in three requests however old the
+  project is.
+- **A username** — a person's work across all their repositories. Without a
+  token this is a sample of public commits; with one it is GitHub's own
+  contribution calendar, every year of it.
+
+Every tree has an address: `…/#owner/repository` or `…/#username` draws the same
+trunk again, so a link can be shared.
 
 ## How to read it
 
 | In the drawing | In the history |
 | --- | --- |
-| Ring width | Activity volume: changed lines when known, otherwise commit count |
-| Ring shape | When activity happened within the month or year, clockwise from the top |
-| Dark wood | Work between 22:00 and 05:00, only when exact author time is available |
-| A thin pale ring | A period when nothing was committed |
-| A scar | One measured change far larger than everything around it, when change size is available |
-| Hue | Whoever committed most in that period — or, for a person's tree, whichever repository took most of it |
+| One ring | One day, week, month, quarter or year — chosen from the age of the history |
+| Ring width | Activity volume: changed lines when known, otherwise commits or contributions |
+| Which way the trunk leans | The hours the work was done in (noon at the top, midnight at the bottom), or the weekdays when only dates are known (Wednesday at the top, the weekend at the bottom) |
+| Dense, dark wood | The share of a ring done at night, or at weekends when only dates are known |
+| Pale outer band | Sapwood: the last twelve months. A history nobody has touched for a year has none |
+| A tight dark seam | A stretch when nothing was committed |
+| A crack | One measured change far larger than everything around it |
+| Timber colour | Whoever committed most in that ring — or, for a person, whichever repository took most of it |
+| Pencil marks | Where each year begins |
 
-Long histories switch from monthly to yearly rings automatically, so a
-fifteen-year history stays legible. The legend changes with the source: GitHub
-contribution aggregates have no time-of-day or changed-line data, so they do
-not pretend to show darkness or scars.
+### A young trunk is drawn closer up, not thinner
+
+A ring is not always a month. A history of a few weeks gets a ring a day, one
+of a year or two gets a ring a week, and only decades are counted by the
+quarter or the year, so every trunk has somewhere between a dozen and about a
+hundred and forty rings. Ring widths are measured against the history's own
+busy periods rather than anybody else's. A one-year-old project and a
+fifteen-year-old one both fill the frame; the caption says what a ring is.
+
+### The lean
+
+The trunk is wrapped around a dial. Each ring grows thickest toward the part
+of the dial its work was done in, and because the dial never moves, a habit
+kept for years adds up: the pith ends up off-centre and the trunk heavy on one
+side. Heavy underneath means built after hours. A change of habit shows as the
+thick side moving from one era of rings to the next.
+
+Only low, smooth curves are allowed to shape a ring, and a handful of commits
+barely leans at all, so the result is an uneven trunk rather than a chart bent
+into a circle. A small amount of waviness is grain, seeded by the name so the
+same history always draws the same piece of wood; it is texture, not data, and
+is always smaller than the lean.
+
+The legend under the drawing is written for the tree on screen: it explains
+only the marks that tree actually has.
 
 ## Privacy
 
@@ -40,19 +68,39 @@ API. No file, name, or commit message leaves the machine — there is no server 
 send it to. That is the point: work that lives on an internal host, or on a
 laptop only, still counts.
 
-The GitHub options call GitHub directly from the browser. Repository reads are
-deliberately capped at the newest 1000 commits; use the local-folder option for
-the complete history of a larger repository.
+The GitHub options call `api.github.com` directly from the browser and nothing
+else.
 
-An anonymous username lookup uses at most five commit-search requests, spread
-across the account's lifetime. With a token, Heartwood switches to the
-GraphQL contribution model: one node can represent several commits on one date
-and repository, and four years are requested together. This drops commit
-messages, parents and other response fields that the drawing never uses.
+## What each GitHub source can and cannot say
 
-GitHub contribution data follows GitHub's own counting rules. It is not a raw
-walk of every branch, and GitHub can omit private or excess repository detail.
-Heartwood marks that result partial rather than presenting it as complete.
+**A repository** is read from GitHub's contributor statistics (commits and
+changed lines per author per week, for the whole history) and its punch card
+(the hours commits were made at, on the authors' own clocks). That is three
+requests for any repository, instead of one per hundred commits. The price is
+resolution: rings are never finer than a week, the lean is the same for every
+ring, and GitHub reports only its top hundred contributors and stops counting
+lines past ten thousand commits — the tree is marked partial, or drawn by
+commit count, when that applies. A repository too young to have weeks, or one
+GitHub has not finished counting, is read from its commit list instead, up to
+the newest 1000 commits, with pages fetched in parallel.
+
+**A person without a token** costs eight searches: the oldest hundred public
+commits, the newest hundred, and six windows between them. Each search also
+reports how many commits its window really holds, so the stretch a window's
+hundred did not reach is not drawn as a silence: its known count is spread
+evenly across it. The caption then says "about", and the status line says the
+history is sampled.
+
+**A person with a token** is read from the contribution calendar: one number
+per day, complete for every year. Which repository each day's commits went to
+is asked for alongside and may be partial, because it only decides colour. The
+years are requested together rather than one after another. Contributions
+follow GitHub's own counting rules, which include pull requests, reviews and
+issues as well as commits.
+
+Histories read from GitHub are remembered in this browser for six hours, so a
+reload or a shared link costs no requests. "Read it again from GitHub" skips
+that.
 
 ## The optional token
 
@@ -64,8 +112,9 @@ The page accepts a token, folded away under the GitHub field:
 | With a token | 30 / minute | 5,000 / hour |
 
 It is optional and always will be — a tool that argues it needs no account
-cannot then demand one. A token enables compact multi-year person histories and
-draws repositories *you* can see rather than only the ones the world can. A
+cannot then demand one. A token turns a person's sampled trunk into their full
+contribution calendar and draws repositories *you* can see rather than only
+the ones the world can. A
 public-only token access is enough for public history; grant repository read
 access only to count private work. The token is kept in this browser's local
 storage and sent to `api.github.com` and nowhere else, because there is no
@@ -104,9 +153,10 @@ to the GitHub field and says so.
 src/core/      activity contracts, the ring model, deterministic randomness
 src/sources/   where history comes from: local .git, a GitHub repository,
                a GitHub person, and a demo; plus the shared GitHub HTTP
-               layer that handles rate limiting and the optional token
+               layer that handles rate limiting and the optional token,
+               and the cache of recently read histories
 src/render/    canvas drawing and PNG export
-src/ui/        the hover inspector
+src/ui/        the hover inspector and the per-tree reading guide
 ```
 
 Sources produce an `ActivityHistory`; renderers consume a `TreeModel`. API
