@@ -13,7 +13,7 @@ const EXPORT_HEIGHT = 1800;
  * How the picture for a README is drawn. A click on that picture comes back
  * as a position in it, so the page has to be able to lay it out again exactly.
  */
-export const README_IMAGE = { width: 1000, textScale: 1.5 } as const;
+export const README_IMAGE = { width: 1000, textScale: 1.5, compactCaption: true } as const;
 
 /** The layout of the README picture, as drawn at `README_IMAGE.width`. */
 export function readmeImageLayout(tree: TreeModel): TreeLayout {
@@ -22,11 +22,12 @@ export function readmeImageLayout(tree: TreeModel): TreeLayout {
     showCaption: true,
     annotate: true,
     textScale: README_IMAGE.textScale,
+    compactCaption: README_IMAGE.compactCaption,
   });
 }
 
 export interface ExportOptions
-  extends Pick<RenderOptions, "theme" | "transparent" | "textScale"> {
+  extends Pick<RenderOptions, "theme" | "transparent" | "textScale" | "compactCaption"> {
   /** Pixels across; the height follows. Defaults to a size worth printing. */
   readonly width?: number;
 }
@@ -42,6 +43,7 @@ function drawForExport(tree: TreeModel, options: ExportOptions): HTMLCanvasEleme
     theme: options.theme,
     transparent: options.transparent,
     textScale: options.textScale,
+    compactCaption: options.compactCaption,
     pixelRatio: 1,
     showCaption: true,
     annotate: true,

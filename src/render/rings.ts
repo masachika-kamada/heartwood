@@ -34,6 +34,11 @@ export interface RenderOptions {
    * that will be shown much smaller than it is drawn, as in a README.
    */
   readonly textScale?: number;
+  /**
+   * Sets the caption smaller and closer under the trunk, leaving the trunk
+   * more of the picture. For a README, where the page around it is busy.
+   */
+  readonly compactCaption?: boolean;
   /** 0..1 reveal used by the growth animation. 1 draws everything. */
   readonly reveal?: number;
   /** Defaults to whatever the visitor's system asks for. */
@@ -52,6 +57,9 @@ export interface TreeLayout {
   readonly bark: number;
   /** Type and line weights grow with the picture, for the large export. */
   readonly captionScale: number;
+  /** The caption's own unit: `captionScale`, or less when it is compact. */
+  readonly captionUnit: number;
+  readonly compactCaption: boolean;
   readonly captionSpace: number;
 }
 
@@ -62,6 +70,7 @@ export interface TreePainter {
 
 /** Room reserved under the drawing for the title block, before scaling. */
 const CAPTION_SPACE = 96;
+const COMPACT_CAPTION = 0.76;
 /** The bark's rough outer edge can stand this much proud of its nominal line. */
 const BARK_ROUGHNESS = 0.22;
 /** The last stretch of the reveal is the bark closing around the wood. */
@@ -180,13 +189,15 @@ export function layoutTree(
   tree: TreeModel,
   width: number,
   height: number,
-  options: Pick<RenderOptions, "showCaption" | "annotate" | "textScale"> = {},
+  options: Pick<RenderOptions, "showCaption" | "annotate" | "textScale" | "compactCaption"> = {},
 ): TreeLayout {
   const showCaption = options.showCaption ?? true;
   const annotate = options.annotate ?? true;
   // A 1600px export should not carry 13px type.
   const captionScale = Math.max(1, width / 720) * (options.textScale ?? 1);
-  const captionSpace = showCaption ? CAPTION_SPACE * captionScale : 0;
+  const compactCaption = options.compactCaption ?? false;
+  const captionUnit = captionScale * (compactCaption ? COMPACT_CAPTION : 1);
+  const captionSpace = showCaption ? (compactCaption ? 80 : CAPTION_SPACE) * captionUnit : 0;
   const bark = barkOf(tree);
   const margin = (annotate && tree.dial !== "none" ? 46 : 22) * captionScale;
 
@@ -221,6 +232,8 @@ export function layoutTree(
     originY: margin + availableHeight / 2 - ((minY + maxY) / 2) * scale,
     bark,
     captionScale,
+    captionUnit,
+    compactCaption,
     captionSpace,
   };
 }
@@ -244,6 +257,7 @@ export function createTreePainter(
     showCaption,
     annotate,
     textScale: options.textScale,
+    compactCaption: options.compactCaption,
   });
 
   canvas.width = Math.max(1, Math.round(width * pixelRatio));
@@ -1009,14 +1023,14 @@ function drawCaption(
   layout: TreeLayout,
   palette: Palette,
 ): void {
-  const unit = layout.captionScale;
-  const baseline = layout.height - layout.captionSpace + 30 * unit;
+  const unit = layout.captionUnit;
+  const baseline = layout.height - layout.captionSpace + (layout.compactCaption ? 16 : 30) * unit;
   const centre = layout.width / 2;
 
   context.textAlign = "center";
   context.textBaseline = "alphabetic";
   context.fillStyle = palette.ink;
-  context.font = `500 ${22 * unit}px ui-serif, Georgia, 'Times New Roman', serif`;
+  context.font = `500 ${(layout.compactCaption ? 25 : 22) * unit}px ui-serif, Georgia, 'Times New Roman', serif`;
   context.fillText(tree.name, centre, baseline, layout.width - 40 * unit);
 
   context.fillStyle = palette.inkMuted;
