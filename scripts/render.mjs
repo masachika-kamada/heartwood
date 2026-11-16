@@ -198,6 +198,9 @@ function readmeBlock(core, files, dir) {
       );
     })
     .join("");
+  // On a profile the trunk is the reader's host's own; say so.
+  const own = target.toLowerCase() === (process.env.GITHUB_REPOSITORY_OWNER || "").toLowerCase();
+  const subject = own ? "My GitHub history" : `The GitHub history of ${escape(target)}`;
   return [
     `<p align="center">`,
     `  <a href="${where}">`,
@@ -208,6 +211,8 @@ function readmeBlock(core, files, dir) {
     `  </a>`,
     `  <br>`,
     `  ${bands}`,
+    `  <br>`,
+    `  <sub>${subject}, drawn as the growth rings of a tree · made with <a href="https://github.com/masachika-kamada/heartwood">Heartwood</a></sub>`,
     `  <br>`,
     `  <sub>Rest the pointer on a band to read that ring. Click it to open that ring.</sub>`,
     `</p>`,
