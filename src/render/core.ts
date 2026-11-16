@@ -43,6 +43,8 @@ export interface Core {
 
 /** A band thinner than this cannot be pointed at. */
 const MIN_BAND = 2;
+/** Height of the strip of year labels under the cylinder. */
+const SCALE_HEIGHT = 16;
 
 export function renderCore(tree: TreeModel, options: CoreOptions = {}): Core {
   const height = Math.round(options.height ?? 54);
@@ -56,9 +58,11 @@ export function renderCore(tree: TreeModel, options: CoreOptions = {}): Core {
   const widths = bandWidths(tree.rings, total - bark);
   const length = widths.reduce((sum, width) => sum + width, 0) + bark;
 
+  // Room under the cylinder for the years, so it reads as a timeline.
+  const scale = SCALE_HEIGHT;
   const canvas = document.createElement("canvas");
   canvas.width = length * pixelRatio;
-  canvas.height = height * pixelRatio;
+  canvas.height = (height + scale) * pixelRatio;
   const context = canvas.getContext("2d");
   if (!context) {
     return { height, slices: [] };
@@ -67,6 +71,7 @@ export function renderCore(tree: TreeModel, options: CoreOptions = {}): Core {
 
   // The cylinder's outline: rounded where the borer broke it off.
   const radius = height * 0.28;
+  context.save();
   context.beginPath();
   context.roundRect(0, 0, length, height, radius);
   context.clip();
@@ -105,6 +110,27 @@ export function renderCore(tree: TreeModel, options: CoreOptions = {}): Core {
   roundness.addColorStop(1, "rgba(20, 10, 4, 0.5)");
   context.fillStyle = roundness;
   context.fillRect(0, 0, length, height);
+  context.restore();
+
+  // The years, each under the first ring it grew. A mid grey: this one image
+  // has to be legible on a dark page and a light one.
+  context.fillStyle = "#8b8f96";
+  context.font = "10px ui-sans-serif, system-ui, sans-serif";
+  context.textBaseline = "top";
+  let reach = -Infinity;
+  x = 0;
+  for (const [index, width] of widths.entries()) {
+    const mark = tree.rings[index]!.mark;
+    if (mark !== null) {
+      context.fillRect(x, height + 1, 1, 4);
+      const labelWidth = context.measureText(mark).width;
+      if (x + 3 > reach + 6 && x + 3 + labelWidth < length) {
+        context.fillText(mark, x + 3, height + 3);
+        reach = x + 3 + labelWidth;
+      }
+    }
+    x += width;
+  }
 
   const noun = activityNoun(tree.metric);
   const slices: CoreSlice[] = [];
@@ -112,7 +138,7 @@ export function renderCore(tree: TreeModel, options: CoreOptions = {}): Core {
   const cut = (width: number, ringIndex: number, title: string): void => {
     const piece = document.createElement("canvas");
     piece.width = width * pixelRatio;
-    piece.height = height * pixelRatio;
+    piece.height = (height + scale) * pixelRatio;
     piece
       .getContext("2d")
       ?.drawImage(
@@ -134,7 +160,7 @@ export function renderCore(tree: TreeModel, options: CoreOptions = {}): Core {
   }
   cut(bark, -1, `Bark · ${tree.name}`);
 
-  return { height, slices };
+  return { height: height + scale, slices };
 }
 
 /**

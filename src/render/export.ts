@@ -10,10 +10,10 @@ const EXPORT_WIDTH = 1600;
 const EXPORT_HEIGHT = 1800;
 
 /** How the picture for a README is drawn. */
-export const README_IMAGE = { width: 1000, textScale: 1.5, compactCaption: true } as const;
+export const README_IMAGE = { width: 1000, textScale: 1.5, compactCaption: true, pins: true } as const;
 
 export interface ExportOptions
-  extends Pick<RenderOptions, "theme" | "transparent" | "textScale" | "compactCaption"> {
+  extends Pick<RenderOptions, "theme" | "transparent" | "textScale" | "compactCaption" | "pins"> {
   /** Pixels across; the height follows. Defaults to a size worth printing. */
   readonly width?: number;
 }
@@ -30,6 +30,7 @@ function drawForExport(tree: TreeModel, options: ExportOptions): HTMLCanvasEleme
     transparent: options.transparent,
     textScale: options.textScale,
     compactCaption: options.compactCaption,
+    pins: options.pins,
     pixelRatio: 1,
     showCaption: true,
     annotate: true,

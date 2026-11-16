@@ -9,6 +9,7 @@ import { loadLocalHistory } from "./sources/git/local";
 import { createTreePainter, type TreePainter } from "./render/rings";
 import { exportTreePng, README_IMAGE, treeImageDataUrl } from "./render/export";
 import { renderCore } from "./render/core";
+import { noticeLines } from "./ui/notice";
 import { createInspector } from "./ui/inspector";
 import { parseTreeLink, type TreeLink } from "./ui/link";
 import { INPUT_EXAMPLES } from "./ui/examples";
@@ -554,6 +555,7 @@ window.heartwood = {
   image: (options) =>
     currentTree ? treeImageDataUrl(currentTree, { ...README_IMAGE, ...options }) : null,
   core: (options) => (currentTree ? renderCore(currentTree, options) : null),
+  notice: () => (currentTree ? noticeLines(currentTree) : []),
 };
 
 const linked = linkedTree();

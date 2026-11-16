@@ -145,6 +145,7 @@ try {
   if (!core || core.slices.length === 0) {
     throw new Error("The page drew no core sample.");
   }
+  const notice = await page.evaluate(() => window.heartwood.notice());
   const coreDir = join(outDir, "core");
   await rm(coreDir, { recursive: true, force: true });
   await mkdir(coreDir, { recursive: true });
@@ -163,7 +164,7 @@ try {
     if (from === -1 || to < from) {
       console.log(`note: ${readme} has no ${START} … ${END} to fill in.`);
     } else {
-      const block = readmeBlock(core, files, relative(dirname(readme), outDir).split(sep).join("/"));
+      const block = readmeBlock(core, notice, files, relative(dirname(readme), outDir).split(sep).join("/"));
       await writeFile(readme, `${text.slice(0, from + START.length)}\n${block}\n${text.slice(to)}`);
       console.log(`updated ${readme}`);
     }
@@ -183,7 +184,7 @@ try {
  * core sample — separate images with no space between them, each with a
  * `title` the browser shows on hover and a link to its own ring.
  */
-function readmeBlock(core, files, dir) {
+function readmeBlock(core, notice, files, dir) {
   const escape = (value) =>
     String(value).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
   const where = `${site}#${encodeURIComponent(target).replace(/%2F/gi, "/")}`;
@@ -212,6 +213,7 @@ function readmeBlock(core, files, dir) {
     `  <br>`,
     `  ${bands}`,
     `  <br>`,
+    ...(notice.length > 0 ? [`  ${notice.map(escape).join(" · ")}`, `  <br>`] : []),
     `  <sub>${subject}, drawn as the growth rings of a tree · made with <a href="https://github.com/masachika-kamada/heartwood">Heartwood</a></sub>`,
     `  <br>`,
     `  <sub>Rest the pointer on a band to read that ring. Click it to open that ring.</sub>`,

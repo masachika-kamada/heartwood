@@ -12,6 +12,7 @@
  * the hover inspector uses the same function to turn pixels back into rings.
  */
 
+import { highlightsOf } from "../core/highlights";
 import type { Ring, RingPeriod, TreeModel } from "../core/types";
 import { activityNoun, groupNoun } from "../core/activity";
 import { hashString, mulberry32 } from "../core/prng";
@@ -39,6 +40,11 @@ export interface RenderOptions {
    * more of the picture. For a README, where the page around it is busy.
    */
   readonly compactCaption?: boolean;
+  /**
+   * Pins the things worth noticing — the thickest ring, the longest quiet
+   * stretch — the way a slice in a museum is pinned and labelled.
+   */
+  readonly pins?: boolean;
   /** 0..1 reveal used by the growth animation. 1 draws everything. */
   readonly reveal?: number;
   /** Defaults to whatever the visitor's system asks for. */
@@ -339,6 +345,9 @@ export function createTreePainter(
         context.globalAlpha = settled;
         drawDial(context, tree, layout, barkEdge, palette);
         drawRuler(context, tree, layout);
+        if (options.pins) {
+          drawPins(context, tree, layout, barkEdge, palette);
+        }
         context.globalAlpha = 1;
       }
       if (showCaption) {
@@ -1015,6 +1024,102 @@ const PERIOD_ADJECTIVE: Readonly<Record<RingPeriod, string>> = {
   month: "monthly",
   quarter: "quarterly",
   year: "yearly",
+};
+
+/**
+ * Pins, as on a slice in a museum: a dot on the ring, a thread out past the
+ * bark, and a few words. They sit on the upper shoulders of the trunk, in the
+ * gaps the dial leaves between its bars.
+ */
+function drawPins(
+  context: CanvasRenderingContext2D,
+  tree: TreeModel,
+  layout: TreeLayout,
+  barkEdge: readonly number[],
+  palette: Palette,
+): void {
+  const found = highlightsOf(tree);
+  const pins: { ring: Ring; title: string; text: string; turn: number }[] = [];
+  if (found.peak) {
+    pins.push({
+      ring: found.peak,
+      title: `busiest ${PERIOD_NOUN[tree.period]}`,
+      text: `${found.peak.label} · ${formatCount(found.peak.activityCount)}`,
+      turn: 30 / 360,
+    });
+  }
+  if (found.quiet) {
+    const { from, to, rings } = found.quiet;
+    pins.push({
+      ring: tree.rings[Math.floor((from.index + to.index) / 2)]!,
+      title: "longest quiet stretch",
+      text: `${rings} ${PERIOD_NOUN[tree.period]}s from ${from.label}`,
+      turn: 330 / 360,
+    });
+  }
+
+  const unit = layout.captionScale;
+  for (const pin of pins) {
+    const angle = pin.turn * Math.PI * 2;
+    const dx = Math.sin(angle);
+    const dy = -Math.cos(angle);
+    const contour = pin.ring.contour;
+    const sample = Math.round(pin.turn * contour.length) % contour.length;
+    const inner = tree.rings[pin.ring.index - 1]?.contour[sample] ?? 0;
+    const at = ((inner + contour[sample]!) / 2) * layout.scale;
+    const edge = barkEdge[Math.round(pin.turn * barkEdge.length) % barkEdge.length]! * layout.scale;
+    const out = edge + 20 * unit;
+    const x = (distance: number): number => layout.originX + dx * distance;
+    const y = (distance: number): number => layout.originY + dy * distance;
+
+    // The thread: pale with a dark edge over the wood, ink beyond the bark.
+    context.lineCap = "round";
+    for (const [width, colour] of [
+      [2.6 * unit, "rgba(30, 18, 10, 0.55)"],
+      [1.2 * unit, "rgba(250, 238, 214, 0.95)"],
+    ] as const) {
+      context.beginPath();
+      context.moveTo(x(at), y(at));
+      context.lineTo(x(edge), y(edge));
+      context.lineWidth = width;
+      context.strokeStyle = colour;
+      context.stroke();
+    }
+    context.beginPath();
+    context.moveTo(x(edge), y(edge));
+    context.lineTo(x(out), y(out));
+    context.lineWidth = 1.2 * unit;
+    context.strokeStyle = palette.inkMuted;
+    context.stroke();
+
+    context.beginPath();
+    context.arc(x(at), y(at), 3.4 * unit, 0, Math.PI * 2);
+    context.fillStyle = "rgba(250, 238, 214, 0.98)";
+    context.fill();
+    context.lineWidth = 1.1 * unit;
+    context.strokeStyle = "rgba(30, 18, 10, 0.8)";
+    context.stroke();
+
+    const side = dx >= 0 ? 1 : -1;
+    context.textAlign = side > 0 ? "left" : "right";
+    context.textBaseline = "alphabetic";
+    const textX = x(out) + side * 5 * unit;
+    context.fillStyle = palette.inkMuted;
+    context.font = `${8.5 * unit}px ui-sans-serif, system-ui, sans-serif`;
+    context.fillText(pin.title, textX, y(out) - 3 * unit);
+    context.fillStyle = palette.ink;
+    context.font = `600 ${10 * unit}px ui-sans-serif, system-ui, sans-serif`;
+    context.fillText(pin.text, textX, y(out) + 9 * unit);
+  }
+  context.textAlign = "center";
+}
+
+const PERIOD_NOUN: Readonly<Record<TreeModel["period"], string>> = {
+  day: "day",
+  week: "week",
+  month: "month",
+  quarter: "quarter",
+  year: "year",
 };
 
 function drawCaption(
