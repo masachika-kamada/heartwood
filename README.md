@@ -176,22 +176,14 @@ fills in, and keeps up to date, whatever lies between them:
 
 ### A README you can point at
 
-What the Action writes between those comments is not only a picture. Two
-things in it get a little interaction through GitHub's sanitiser, with no
-script anywhere:
-
-- **Under the trunk is its core sample** — the thin cylinder a forester bores
-  out of a tree to count its rings, pith at the left and bark at the right.
-  It is not one image but one image per ring, set side by side with nothing
-  between them, and each carries a `title`. GitHub keeps titles, and a browser
-  shows one when the pointer rests on its image. So resting on a band says
-  what that ring is: *Mar 2023 · 48 contributions · 25% at weekends*.
-  Clicking a band opens the page with that ring picked out.
-- **The trunk itself knows where it was clicked.** Its image is marked
-  `ismap`, an attribute from the 1990s that GitHub also lets through. A
-  browser that follows a link around such an image adds the position of the
-  click to the address — `…/#you@600?213,188`. The page lays the same picture
-  out again, finds the ring under that point and opens with it picked out.
+What the Action writes between those comments is not only a picture. Under
+the trunk is its core sample — the thin cylinder a forester bores out of a
+tree to count its rings, pith at the left and bark at the right. It is not one
+image but one image per ring, set side by side with nothing between them, and
+each carries a `title`. GitHub strips scripts and styles but keeps titles, and
+a browser shows one when the pointer rests on its image. So resting on a band
+says what that ring is: *Mar 2023 · 48 contributions · 25% at weekends*.
+Clicking a band opens the page with that ring picked out.
 
 The titles hold dates and counts only, never the names of repositories or
 people. To show only the picture, leave the comments out and write the image

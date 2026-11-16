@@ -4,27 +4,13 @@
  */
 
 import type { TreeModel } from "../core/types";
-import { layoutTree, renderTree, type RenderOptions, type TreeLayout } from "./rings";
+import { renderTree, type RenderOptions } from "./rings";
 
 const EXPORT_WIDTH = 1600;
 const EXPORT_HEIGHT = 1800;
 
-/**
- * How the picture for a README is drawn. A click on that picture comes back
- * as a position in it, so the page has to be able to lay it out again exactly.
- */
+/** How the picture for a README is drawn. */
 export const README_IMAGE = { width: 1000, textScale: 1.5, compactCaption: true } as const;
-
-/** The layout of the README picture, as drawn at `README_IMAGE.width`. */
-export function readmeImageLayout(tree: TreeModel): TreeLayout {
-  const width = README_IMAGE.width;
-  return layoutTree(tree, width, Math.round((width * EXPORT_HEIGHT) / EXPORT_WIDTH), {
-    showCaption: true,
-    annotate: true,
-    textScale: README_IMAGE.textScale,
-    compactCaption: README_IMAGE.compactCaption,
-  });
-}
 
 export interface ExportOptions
   extends Pick<RenderOptions, "theme" | "transparent" | "textScale" | "compactCaption"> {

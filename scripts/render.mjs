@@ -179,14 +179,9 @@ try {
 }
 
 /**
- * What goes into the README. Two things in it are doing unusual work:
- *
- * - the trunk's image is marked `ismap`, so a click on it opens the page with
- *   the position of the click on the end of the address, and the page works
- *   out which ring that was;
- * - the bands of the core sample are separate images with no space between
- *   them, each with a `title` the browser shows on hover and a link to its
- *   own ring.
+ * What goes into the README: the trunk, linked to the page, and under it the
+ * core sample — separate images with no space between them, each with a
+ * `title` the browser shows on hover and a link to its own ring.
  */
 function readmeBlock(core, files, dir) {
   const escape = (value) =>
@@ -205,16 +200,16 @@ function readmeBlock(core, files, dir) {
     .join("");
   return [
     `<p align="center">`,
-    `  <a href="${where}@${shownWidth}">`,
+    `  <a href="${where}">`,
     `    <picture>`,
     `      <source media="(prefers-color-scheme: dark)" srcset="${dir}/${stem}-dark.webp">`,
-    `      <img src="${dir}/${stem}-light.webp" alt="${escape(target)}'s history on GitHub drawn as the growth rings of a tree trunk" width="${shownWidth}" ismap>`,
+    `      <img src="${dir}/${stem}-light.webp" alt="${escape(target)}'s history on GitHub drawn as the growth rings of a tree trunk" width="${shownWidth}">`,
     `    </picture>`,
     `  </a>`,
     `  <br>`,
     `  ${bands}`,
     `  <br>`,
-    `  <sub>Rest the pointer on a band to read that ring. Click a band, or anywhere on the trunk, to open that ring.</sub>`,
+    `  <sub>Rest the pointer on a band to read that ring. Click it to open that ring.</sub>`,
     `</p>`,
   ].join("\n");
 }

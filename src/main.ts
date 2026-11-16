@@ -7,14 +7,9 @@ import { loadGitHubHistory, parseGitHubInput, type GitHubInput } from "./sources
 import { loadGitHubUserHistory } from "./sources/github-user";
 import { loadLocalHistory } from "./sources/git/local";
 import { createTreePainter, type TreePainter } from "./render/rings";
-import {
-  exportTreePng,
-  README_IMAGE,
-  readmeImageLayout,
-  treeImageDataUrl,
-} from "./render/export";
+import { exportTreePng, README_IMAGE, treeImageDataUrl } from "./render/export";
 import { renderCore } from "./render/core";
-import { createInspector, ringAtPoint } from "./ui/inspector";
+import { createInspector } from "./ui/inspector";
 import { parseTreeLink, type TreeLink } from "./ui/link";
 import { INPUT_EXAMPLES } from "./ui/examples";
 import { readingFor } from "./ui/reading";
@@ -210,8 +205,7 @@ function animateGrowth(): void {
 
 /**
  * Someone arrived by clicking a ring somewhere else — a band of the core
- * sample in a README, or a spot on the README's picture of the trunk. Show
- * them the ring they clicked.
+ * sample in a README. Show them the ring they clicked.
  */
 function pointAtLinkedRing(): void {
   const link = pendingLink;
@@ -219,18 +213,7 @@ function pointAtLinkedRing(): void {
   if (!link || !currentTree || currentTree.rings.length === 0) {
     return;
   }
-  let ring = link.ring === null ? null : (currentTree.rings[link.ring] ?? null);
-  if (!ring && link.point) {
-    // The click is in the pixels the picture was shown at; the layout is in
-    // the pixels it was drawn at.
-    const factor = README_IMAGE.width / link.point.shownWidth;
-    ring = ringAtPoint(
-      currentTree,
-      readmeImageLayout(currentTree),
-      link.point.x * factor,
-      link.point.y * factor,
-    );
-  }
+  const ring = link.ring === null ? null : (currentTree.rings[link.ring] ?? null);
   if (ring) {
     inspector.select(ring);
     canvas.scrollIntoView({ block: "center", behavior: reducedMotion.matches ? "auto" : "smooth" });
@@ -447,7 +430,7 @@ window.addEventListener("hashchange", () => {
   if (!link) {
     return;
   }
-  const wantsRing = link.ring !== null || link.point !== null;
+  const wantsRing = link.ring !== null;
   if (wantsRing || link.name.toLowerCase() !== repoInput.value.trim().toLowerCase()) {
     pendingLink = link;
     repoInput.value = link.name;
