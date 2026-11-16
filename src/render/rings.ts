@@ -1049,11 +1049,11 @@ function drawPins(
     });
   }
   if (found.quiet) {
-    const { from, to, rings } = found.quiet;
+    const { from, to } = found.quiet;
     pins.push({
       ring: tree.rings[Math.floor((from.index + to.index) / 2)]!,
       title: "longest quiet stretch",
-      text: `${rings} ${PERIOD_NOUN[tree.period]}s from ${from.label}`,
+      text: `${from.label} – ${to.label}`,
       turn: 330 / 360,
     });
   }
@@ -1103,12 +1103,23 @@ function drawPins(
     const side = dx >= 0 ? 1 : -1;
     context.textAlign = side > 0 ? "left" : "right";
     context.textBaseline = "alphabetic";
-    const textX = x(out) + side * 5 * unit;
+    const titleFont = `${8.5 * unit}px ui-sans-serif, system-ui, sans-serif`;
+    const textFont = `600 ${10 * unit}px ui-sans-serif, system-ui, sans-serif`;
+    context.font = textFont;
+    let widest = context.measureText(pin.text).width;
+    context.font = titleFont;
+    widest = Math.max(widest, context.measureText(pin.title).width);
+    // Keep the words inside the picture, even if that slides them off the thread's end.
+    const edgeGap = 6 * unit;
+    let textX = x(out) + side * 5 * unit;
+    textX =
+      side > 0
+        ? Math.min(textX, layout.width - edgeGap - widest)
+        : Math.max(textX, edgeGap + widest);
     context.fillStyle = palette.inkMuted;
-    context.font = `${8.5 * unit}px ui-sans-serif, system-ui, sans-serif`;
     context.fillText(pin.title, textX, y(out) - 3 * unit);
     context.fillStyle = palette.ink;
-    context.font = `600 ${10 * unit}px ui-sans-serif, system-ui, sans-serif`;
+    context.font = textFont;
     context.fillText(pin.text, textX, y(out) + 9 * unit);
   }
   context.textAlign = "center";
